@@ -13,8 +13,8 @@
     "editor.detectIndentation": false
   },
 
-  "rust-analyzer.linkedProjects": ["rust-project.json"],
-  "rust-analyzer.checkOnSave": false,
+  "rust-analyzer.check.allTargets": false,
+  "rust-analyzer.checkOnSave": true,
   "rust-analyzer.imports.granularity.enforce": true,
 
   "[rust]": {

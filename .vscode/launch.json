@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug kernel (QEMU)",
+      "type": "lldb",
+      "request": "custom",
+      "preLaunchTask": "qemu: debug server",
+      "targetCreateCommands": ["target create ${workspaceFolder}/kernel.elf"],
+      "processCreateCommands": [
+        "script import time; time.sleep(0.5)",
+        "gdb-remote localhost:1234"
+      ],
+      "postRunCommands": ["register read pc sp x0 x1"]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "make kernel.elf",
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "silent", "clear": true },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "run",
+      "type": "shell",
+      "command": "make run",
+      "detail": "Boot the kernel. Ctrl-A X quits, Ctrl-A C opens the QEMU monitor.",
+      "presentation": { "reveal": "always", "clear": true, "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "regs",
+      "type": "shell",
+      "command": "make regs",
+      "detail": "Boot, dump PC/SP/X0-X3, exit.",
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "disassemble",
+      "type": "shell",
+      "command": "make dis",
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "clean",
+      "type": "shell",
+      "command": "make clean",
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
+    },
+    {
+      "label": "qemu: debug server",
+      "type": "shell",
+      "command": "make debug",
+      "detail": "Started automatically by the debugger. QEMU freezes at instruction 0.",
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": {
+        "pattern": [{ "regexp": "^(.*)$", "file": 1, "location": 1, "message": 1 }],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^clang",
+          "endsPattern": "^qemu-system-aarch64"
+        }
+      }
+    }
+  ]
+}

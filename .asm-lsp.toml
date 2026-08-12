@@ -1,0 +1,8 @@
+[default_config]
+assembler = "gas"
+instruction_set = "arm64"
+
+[default_config.opts]
+compiler = "clang"
+diagnostics = true
+default_diagnostics = true

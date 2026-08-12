@@ -1,0 +1,48 @@
+{
+  "files.associations": {
+    "*.s": "arm",
+    "*.S": "arm",
+    "*.dts": "dts",
+    "*.dtsi": "dts"
+  },
+
+  "[arm]": {
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.formatOnSave": false,
+    "editor.detectIndentation": false
+  },
+
+  "rust-analyzer.linkedProjects": ["rust-project.json"],
+  "rust-analyzer.checkOnSave": false,
+  "rust-analyzer.imports.granularity.enforce": true,
+
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 4
+  },
+
+  "editor.rulers": [100],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+
+  "search.exclude": {
+    "**/*.o": true,
+    "**/*.elf": true,
+    "**/*.dtb": true,
+    "virt.dts": true
+  },
+
+  "cSpell.words": [
+    "aarch",
+    "cortex",
+    "dtsi",
+    "ldrb",
+    "nographic",
+    "qemu",
+    "rodata",
+    "strb",
+    "wozmon"
+  ]
+}

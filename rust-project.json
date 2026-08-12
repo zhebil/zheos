@@ -1,0 +1,14 @@
+{
+  "sysroot": "/Users/zhebil/.rustup/toolchains/stable-aarch64-apple-darwin",
+  "sysroot_src": "/Users/zhebil/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library",
+  "crates": [
+    {
+      "root_module": "main.rs",
+      "edition": "2021",
+      "deps": [],
+      "cfg": [],
+      "target": "aarch64-unknown-none",
+      "is_workspace_member": true
+    }
+  ]
+}

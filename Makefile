@@ -1,0 +1,79 @@
+BIN    := $(shell rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin
+LD     := $(BIN)/rust-lld
+QEMU   := qemu-system-aarch64
+QFLAGS := -M virt -cpu cortex-a72 -m 128M -nographic -kernel kernel.elf
+MON    := -M virt -cpu cortex-a72 -m 128M -display none -serial null -monitor stdio
+
+RUSTC  := rustc --target aarch64-unknown-none --edition 2021 \
+          -C panic=abort -C opt-level=2 --emit=obj --crate-type=lib
+
+kernel.elf: kernel.s main.rs linker.ld
+	clang --target=aarch64-unknown-none -c kernel.s -o kernel.o
+	$(RUSTC) -o main.o main.rs
+	$(LD) -flavor gnu -T linker.ld kernel.o main.o -o $@
+
+run: kernel.elf
+	$(QEMU) $(QFLAGS)
+
+debug: kernel.elf
+	$(QEMU) $(QFLAGS) -s -S
+
+regs: kernel.elf
+	{ sleep 1; printf 'info registers\nquit\n'; } | $(QEMU) $(MON) -kernel kernel.elf \
+	  | tr '\r' '\n' | grep -E '^ ?(PC|SP|X[0-9])' | head -6
+
+ADDR ?= 0x40000000
+N    ?= 16
+FMT  ?= xb
+
+mem: kernel.elf
+	{ sleep 1; printf 'xp /$(N)$(FMT) $(ADDR)\nquit\n'; } | $(QEMU) $(MON) -kernel kernel.elf \
+	  | tr '\r' '\n' | grep -E '^(0x)?[0-9a-f]+:'
+
+# Fill .bss with 0xAA and the 8 bytes just past it with 0xBB, then boot.
+# Correct zeroing => all 00 up to __bss_end, guard still BB.
+test-bss: kernel.elf
+	@S=0x$$($(BIN)/llvm-nm kernel.elf | awk '/ __bss_start$$/{print $$1}'); \
+	E=0x$$($(BIN)/llvm-nm kernel.elf | awk '/ __bss_end$$/{print $$1}'); \
+	A=$$S; ARGS=""; \
+	while [ $$(($$A)) -lt $$(($$E)) ]; do \
+	  ARGS="$$ARGS -device loader,addr=$$A,data=0xAAAAAAAAAAAAAAAA,data-len=8"; \
+	  A=$$(printf '0x%x' $$(($$A + 8))); \
+	done; \
+	ARGS="$$ARGS -device loader,addr=$$E,data=0xBBBBBBBBBBBBBBBB,data-len=8"; \
+	echo ".bss $$S .. $$E   guard $$E"; \
+	{ sleep 1; printf 'xp /%dxb %s\nquit\n' $$(( $$E - $$S + 8 )) $$S; } | \
+	  $(QEMU) $(MON) -kernel kernel.elf $$ARGS | tr '\r' '\n' | grep -E '^[0-9a-f]+:'
+
+# Feed scripted keystrokes to the guest's serial input, capture output.
+#   make feed INPUT='1234'
+INPUT ?= abc123
+feed: kernel.elf
+	@{ sleep 1; printf '$(INPUT)'; sleep 2; } | \
+	  $(QEMU) -M virt -cpu cortex-a72 -m 128M -display none -serial stdio -monitor none \
+	  -kernel kernel.elf
+
+dis: kernel.elf
+	$(BIN)/llvm-objdump -d $<
+
+sections: kernel.elf
+	$(BIN)/llvm-readobj --section-headers $<
+
+syms: kernel.elf
+	$(BIN)/llvm-nm -n $<
+
+# ulimit -f is in 512-byte blocks; QEMU dies with SIGXFSZ instead of filling the disk.
+LOGCAP ?= 400000
+
+trace: kernel.elf
+	rm -f /tmp/zheos.log
+	ulimit -f $(LOGCAP); $(QEMU) $(QFLAGS) -d int,in_asm -D /tmp/zheos.log
+
+kill:
+	-pkill -f qemu-system-aarch64
+	@ps -Ao pid,etime,comm | grep qemu-system || echo "no qemu running"
+
+clean:
+	rm -f kernel.o main.o kernel.elf
+
+.PHONY: run debug regs mem test-bss feed dis sections syms trace kill clean

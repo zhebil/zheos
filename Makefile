@@ -1,16 +1,15 @@
 BIN    := $(shell rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin
-LD     := $(BIN)/rust-lld
 QEMU   := qemu-system-aarch64
 QFLAGS := -M virt -cpu cortex-a72 -m 128M -nographic -kernel kernel.elf
 MON    := -M virt -cpu cortex-a72 -m 128M -display none -serial null -monitor stdio
 
-RUSTC  := rustc --target aarch64-unknown-none --edition 2021 \
-          -C panic=abort -C opt-level=2 --emit=obj --crate-type=lib
+CARGO_OUT := target/aarch64-unknown-none/release/zheos
 
-kernel.elf: kernel.s main.rs linker.ld
-	clang --target=aarch64-unknown-none -c kernel.s -o kernel.o
-	$(RUSTC) -o main.o main.rs
-	$(LD) -flavor gnu -T linker.ld kernel.o main.o -o $@
+# cargo does its own change detection, so this always runs and is cheap.
+# kernel.elf is a copy so the debugger and QEMU have one stable path.
+kernel.elf:
+	cargo build --release
+	@cp $(CARGO_OUT) $@
 
 run: kernel.elf
 	$(QEMU) $(QFLAGS)
@@ -74,6 +73,7 @@ kill:
 	@ps -Ao pid,etime,comm | grep qemu-system || echo "no qemu running"
 
 clean:
-	rm -f kernel.o main.o kernel.elf
+	cargo clean
+	rm -f kernel.elf
 
-.PHONY: run debug regs mem test-bss feed dis sections syms trace kill clean
+.PHONY: kernel.elf run debug regs mem test-bss feed dis sections syms trace kill clean

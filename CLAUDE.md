@@ -12,13 +12,17 @@ physically happens".
 Long-term goal: write a very simple kernel from scratch. Not a product. No deadline. The point
 is understanding, not shipping.
 
-Current state: milestones 1-4 done. `kernel.s` sets up a stack, zeroes `.bss`, and prints a
-string via the PL011 at `0x09000000`. `linker.ld` controls layout, `make test-bss` verifies the
-zeroing with a poison-and-guard test. Milestone 5 in progress: handing off from assembly to
-`#![no_std]` Rust in `main.rs`.
+Current state: milestones 1-5 done. `src/kernel.s` sets up a stack, zeroes `.bss`, and calls
+`kmain`. `linker.ld` controls layout, `make test-bss` verifies the zeroing with a
+poison-and-guard test. Milestone 6 in progress: a real PL011 driver in `#![no_std]` Rust -
+`init` (disable, busy-wait, flush, baud divisors, 8N1 + FIFOs, mask interrupts, enable) and
+`putc` (poll TXFF, write DR) are done and verified by reading the registers back. `getc` next.
 
-Build is `make`-driven, not cargo. `rustc --emit=obj` produces `main.o`, which is linked
-alongside `kernel.o` by `rust-lld`. No cargo until there is a reason for one.
+Build is cargo (edition 2024), driven through the `Makefile` so the QEMU targets stay one
+command. `build.rs` passes `-Tlinker.ld` to the linker; `.cargo/config.toml` pins the target
+to `aarch64-unknown-none`. `src/kernel.s` is pulled in with `global_asm!(include_str!(...))`,
+so there is no separate assembler step. `make kernel.elf` copies the cargo output to
+`kernel.elf` at the repo root, which is the path the debugger and every QEMU target use.
 
 ## Working agreement (IMPORTANT - overrides default behavior)
 

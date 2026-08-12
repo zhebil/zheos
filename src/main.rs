@@ -1,11 +1,14 @@
 #![no_std]
+#![no_main]
+
+core::arch::global_asm!(include_str!("kernel.s"));
 
 #[panic_handler]
 fn panic_handler(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
     let uart = uart::UARTDriver::new();
     uart.init();

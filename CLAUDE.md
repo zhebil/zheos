@@ -1,28 +1,25 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
 
 ## What this project is
 
-`zheos` - a learning project. The user wants to do bare-metal, low-level programming on a
-virtual machine (QEMU) the way Ben Eater does it on breadboards: understand the CPU, memory
-map, and I/O devices at the level of "I write this byte to this address and something
-physically happens".
+`zheos` - a learning project. Bare-metal, low-level programming on QEMU the way Ben Eater does
+it on breadboards: understand the CPU, memory map, and I/O devices at the level of "I write
+this byte to this address and something physically happens".
 
-Long-term goal: write a very simple kernel from scratch. Not a product. No deadline. The point
-is understanding, not shipping.
+Long-term goal: a very simple kernel from scratch. Not a product. No deadline. The point is
+understanding, not shipping.
 
-Current state: milestones 1-5 done. `src/kernel.s` sets up a stack, zeroes `.bss`, and calls
-`kmain`. `linker.ld` controls layout, `make test-bss` verifies the zeroing with a
-poison-and-guard test. Milestone 6 in progress: a real PL011 driver in `#![no_std]` Rust -
-`init` (disable, busy-wait, flush, baud divisors, 8N1 + FIFOs, mask interrupts, enable) and
-`putc` (poll TXFF, write DR) are done and verified by reading the registers back. `getc` next.
+Target is `aarch64-unknown-none` on QEMU's `virt` machine, chosen because `virt` has flat
+memory, no BIOS, and no legacy modes - `-kernel` loads an ELF and the CPU starts at its entry
+point. The Ben Eater feel is preserved: the UART is a PL011 at `0x0900_0000`, and storing a
+byte there prints a character.
 
-Build is cargo (edition 2024), driven through the `Makefile` so the QEMU targets stay one
-command. `build.rs` passes `-Tlinker.ld` to the linker; `.cargo/config.toml` pins the target
-to `aarch64-unknown-none`. `src/kernel.s` is pulled in with `global_asm!(include_str!(...))`,
-so there is no separate assembler step. `make kernel.elf` copies the cargo output to
-`kernel.elf` at the repo root, which is the path the debugger and every QEMU target use.
+**Current state:** milestones 1-5 done. Milestone 6 in progress - a real PL011 driver in
+`src/uart.rs`. `init` (disable, busy-wait, flush, baud divisors, 8N1 + FIFOs, mask interrupts,
+enable) and `putc` (poll TXFF, write DR) are done and verified by reading the registers back.
+`getc` is next.
 
 ## Working agreement (IMPORTANT - overrides default behavior)
 
@@ -36,197 +33,136 @@ so there is no separate assembler step. `make kernel.elf` copies the cargo outpu
    with questions back at the user and do not withhold part of an explanation to make them
    work it out. They will ask when they want more.
 4. **Links are an optional appendix.** Put primary sources at the end, marked as optional
-   reading for the parts they found interesting. Never make reading a prerequisite for the
-   next step.
+   reading. Never make reading a prerequisite for the next step.
 5. Reviewing, debugging, and explaining *their* code is always welcome - that is not "writing
    code".
+6. Do not introduce a crate or a macro that hides hardware detail unless they ask for it.
+   Assembly only where unavoidable (the instructions before a stack exists); Rust everywhere
+   else.
 
-## Language plan
+## Build
 
-Rust is the target language. Assembly only where it is unavoidable (the first instructions
-after reset, before a stack exists). The plan is to write the few lines of assembly needed by
-hand so the user understands what the CPU does with no runtime, then move to `#![no_std]` Rust
-as soon as there is a valid stack.
+Cargo, edition 2024, no dependencies. The `Makefile` is the front end so QEMU targets stay one
+command.
 
-The user wants to understand every line. Do not introduce a crate or a macro that hides
-hardware detail unless they ask for it.
-
-## Platform decision (proposed, not yet confirmed by the user)
-
-Host is an Apple Silicon Mac. Recommended target: **`aarch64-unknown-none` on QEMU's `virt`
-machine.**
-
-Why this and not x86:
-- QEMU `virt` is a machine invented for virtualization: flat memory, no BIOS, no legacy modes.
-  `-kernel` loads an ELF and the CPU starts at its entry point. Nothing else runs first.
-- x86 boots through 16-bit real mode -> 32-bit protected mode -> 64-bit long mode, plus BIOS or
-  UEFI, plus a 512-byte boot sector. That is a lot of historical accident to learn before the
-  first character appears on screen.
-- `aarch64-unknown-none` is a built-in Rust target - no custom target JSON, no nightly needed
-  for the basics.
-- Host is already arm64, so what the user learns matches the machine on their desk.
-
-The Ben Eater feel is preserved: the UART on `virt` is a PL011 at physical address
-`0x0900_0000`. Storing a byte there prints a character. That is a memory-mapped register, same
-idea as wiring a chip to an address decoder.
-
-If the user prefers x86_64 (to learn how a real PC boots) that is a legitimate different
-project - re-plan rather than mixing the two.
-
-## Toolchain
-
-Verified present: `rustc`/`cargo` 1.89 (stable + nightly, host `aarch64-apple-darwin`),
-`clang`, `make`, `lldb`.
-
-Missing, needed before anything runs:
-
-```sh
-brew install qemu                        # provides qemu-system-aarch64
-rustup target add aarch64-unknown-none   # bare-metal Rust target, no OS, no libc
+```
+Cargo.toml           panic = "abort", debug symbols on in release
+.cargo/config.toml   pins target = aarch64-unknown-none
+build.rs             passes -Tlinker.ld, plus rerun-if-changed so edits rebuild
+linker.ld            layout; ENTRY(_start), plants __bss_start/__bss_end/__stack_top
+src/kernel.s         stack, .bss zeroing, calls kmain. Pulled in by global_asm!(include_str!)
+src/main.rs          kmain, panic handler, bit_mask
+src/uart.rs          PL011 driver
 ```
 
-Notes:
-- There is **no `gdb`** on this machine, only `lldb`. For QEMU's remote debug stub
-  (`-s -S`, GDB protocol on :1234), either `brew install gdb` / `aarch64-elf-gdb`, or connect
-  with `lldb` via `gdb-remote localhost:1234`. `lldb` works but is less commonly documented for
-  this; expect to translate tutorials.
-- `cargo-binutils` + `llvm-tools` give `cargo objdump` / `cargo nm` / `cargo size`, which are
-  the main way to inspect what was actually produced. Install when the user wants to look at
-  their own binary.
-- No `nasm` and no cross `gcc` - not needed for the aarch64 plan, Rust's own assembler
-  (`global_asm!` / `.s` files via the LLVM toolchain) covers it.
+`make kernel.elf` runs cargo and copies the output to `kernel.elf` at the repo root, which is
+the path the debugger and every QEMU target use. There is no separate assembler step.
 
-## The `virt` memory map (verified, QEMU 11.0.3, `-M virt -cpu cortex-a72 -m 128M`)
+Toolchain: rustc/cargo 1.97, `qemu-system-aarch64` 11.0.3, `clang`, `make`, `lldb`,
+`llvm-tools`. **No `gdb`** - `lldb` talks to QEMU's stub via `gdb-remote localhost:1234`, but
+expect to translate tutorials that assume gdb.
 
-Dumped with `info mtree -f`. Full device tree is in `virt.dts` (regenerate: see commands below).
-
-| Address range | What it is |
-|---|---|
-| `0x00000000-0x03FFFFFF` | `virt.flash0` - pflash, where UEFI/`-bios` would live. Unused with `-kernel`. |
-| `0x04000000-0x07FFFFFF` | `virt.flash1` - second flash bank. Unused. |
-| `0x08000000` | `gic_dist` - interrupt controller, distributor half (GICv2) |
-| `0x08010000` | `gic_cpu` - interrupt controller, per-CPU half |
-| **`0x09000000`** | **`pl011` - the UART. Store a byte here and a character appears.** |
-| `0x09010000` | `pl031` - real time clock |
-| `0x09020000` | `fw_cfg` - QEMU's channel for passing config to the guest |
-| `0x09030000` | `pl061` - GPIO controller (closest thing to Ben's 6522 parallel port) |
-| `0x0A000000-0x0A003FFF` | 32 `virtio-mmio` slots, 0x200 apart - disk, net, etc. |
-| `0x3EFF0000` | PCIe I/O window |
-| **`0x40000000-0x47FFFFFF`** | **`mach-virt.ram` - 128 MiB of actual RAM. Code and data go here.** |
-| `0x4010000000+` | PCIe config / MMIO windows |
-
-Everything not listed is unmapped. Touching it raises a data abort.
-
-RAM base is always `0x40000000`; `-m` changes only the size. Devices sit *below* RAM here, the
-opposite of Ben's layout, which does not matter but surprises people once.
-
-## Commands (verified working)
-
-Assembly phase uses the `Makefile` (`make run`, `make debug`, `make regs`, `make clean`).
-It assembles `kernel.s` with clang and links with `rust-lld`, both of which are already
-installed - no Homebrew packages needed for the build. Verified working end to end.
+## Commands
 
 ```sh
-make run      # build + boot, serial on this terminal, Ctrl-A X to quit
-make debug    # same but frozen at instruction 0, gdb stub on :1234
-make regs     # build + boot + dump CPU registers non-interactively + exit
+make run                          # build + boot, serial here. Ctrl-A X quits, Ctrl-A C = monitor
+make debug                        # frozen at instruction 0, gdb stub on :1234
+make regs                         # boot, dump PC/SP/X0-X3, exit
+make mem ADDR=0x09000018 N=4 FMT=xw   # dump physical memory or device registers
+make feed INPUT='abc'             # pipe scripted keystrokes to the guest's serial input
+make test-bss                     # poison .bss, boot, verify it was zeroed (with a guard word)
+make dis / sections / syms        # llvm-objdump / readobj / nm on kernel.elf
+make trace                        # -d int,in_asm with a size cap
+make kill                         # kill every stray qemu-system-aarch64
+```
 
-# the two commands make run wraps, for reference:
-clang --target=aarch64-unknown-none -c kernel.s -o kernel.o
-$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/rust-lld \
-  -flavor gnu -Ttext=0x40000000 -e _start kernel.o -o kernel.elf
+Monitor commands: `info mtree -f` (flat memory map), `info registers`, `info qtree`,
+`xp /16xb <addr>`, `system_reset`.
 
-# regenerate the device tree (the machine describing its own memory map)
+Regenerate the device tree:
+
+```sh
 qemu-system-aarch64 -M virt,dumpdtb=virt.dtb -cpu cortex-a72 -nographic
 dtc -I dtb -O dts virt.dtb -o virt.dts
-
-# run a monitor command without an interactive session (useful for grepping)
-printf 'info mtree -f\nquit\n' | qemu-system-aarch64 -M virt -cpu cortex-a72 -m 128M \
-  -display none -serial null -monitor stdio
 ```
-
-In `-nographic`, `Ctrl-A C` toggles between the guest serial console and the QEMU monitor,
-`Ctrl-A X` quits.
 
 ### Housekeeping - ALWAYS kill QEMU after a test
 
-The kernel ends in `b loop`, an infinite busy loop. QEMU cannot tell that from real work, so
-**every abandoned instance pins a full CPU core forever**. Instances started from a terminal
-that later closes get reparented to launchd (PPID 1) and survive invisibly. Four of them
-accumulated once and ate four cores.
+The kernel ends in an infinite busy loop. QEMU cannot tell that from real work, so **every
+abandoned instance pins a full CPU core forever**, and instances whose terminal closes get
+reparented to launchd and survive invisibly. Four accumulated once and ate four cores.
 
-Rules:
-- Every ad-hoc `qemu-system-aarch64 ...` run must be terminated when the test is done -
-  `Ctrl-A X` interactively, or `kill <pid>` for anything launched in the background.
-- Never leave a QEMU running across turns. Check with `make kill` (kills every
-  `qemu-system-aarch64` and reports what is left).
-- Tracing (`-d`) writes to disk with no built-in limit. A forgotten `-d in_asm,int` run grew
-  `/tmp/broken.log` to **174 GB** in under three hours. `make trace` caps it via `ulimit -f`
-  (`LOGCAP`, 512-byte blocks, default ~200 MB); QEMU dies with SIGXFSZ rather than filling the
-  disk. Any hand-rolled `-d ... -D file` run needs the same `ulimit -f` in front of it.
-- Prefer the non-interactive targets (`make regs`, `make mem`, `make feed`) for scripted checks -
-  they pipe `quit` to the monitor and exit on their own.
+- Terminate every ad-hoc `qemu-system-aarch64` run. Never leave one across turns. Check with
+  `make kill`.
+- Prefer the non-interactive targets (`make regs`, `make mem`, `make feed`) - they pipe `quit`
+  to the monitor and exit on their own.
+- Tracing writes to disk with no built-in limit. A forgotten `-d in_asm,int` run once grew to
+  **174 GB** in three hours. `make trace` caps it with `ulimit -f`; any hand-rolled
+  `-d ... -D file` run needs the same.
 
-Useful monitor commands: `info mtree -f` (flat memory map), `info registers`, `info qtree`
-(device hierarchy), `xp /16xb <addr>` (dump physical memory), `system_reset`.
+## The `virt` memory map
 
-Binary inspection (`rustup component add llvm-tools` is installed). Tools live in
-`$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/`:
-`llvm-objdump -d kernel.elf`, `llvm-readobj --section-headers`, `llvm-nm`, `llvm-size`.
+Verified with `info mtree -f` on `-M virt -cpu cortex-a72 -m 128M`. Full device tree in
+`virt.dts`.
+
+| Address range | What it is |
+|---|---|
+| `0x00000000-0x07FFFFFF` | pflash banks 0 and 1, where UEFI would live. Unused with `-kernel`. |
+| `0x08000000` | `gic_dist` - interrupt controller, distributor half (GICv2) |
+| `0x08010000` | `gic_cpu` - interrupt controller, per-CPU half |
+| **`0x09000000`** | **`pl011` - the UART** |
+| `0x09010000` | `pl031` - real time clock |
+| `0x09020000` | `fw_cfg` - QEMU's channel for passing config to the guest |
+| `0x09030000` | `pl061` - GPIO controller (closest thing to Ben's 6522) |
+| `0x0A000000-0x0A003FFF` | 32 `virtio-mmio` slots, 0x200 apart |
+| **`0x40000000-0x47FFFFFF`** | **`mach-virt.ram` - 128 MiB of RAM. Code and data go here.** |
+| `0x4010000000+` | PCIe config / MMIO windows |
+
+Everything else is unmapped; touching it raises a data abort. RAM base is always `0x40000000`
+and `-m` changes only the size. Devices sit *below* RAM, the opposite of Ben's layout.
 
 ## Debugging signatures
 
-- **`PC=0x200`** means a fault was taken with no handler installed. `VBAR_EL1` is 0 at reset,
-  `0x200` is the synchronous-exception slot, and it points into empty flash, so the CPU
-  fault-loops forever. From outside it just looks like a hang. Check with `make regs`.
-- `-d int -D /tmp/x.log` logs every exception with its ESR. `-d in_asm` logs translated blocks.
+- **`PC=0x200`** means a fault was taken with no handler installed. `VBAR_EL1` is 0 at reset and
+  `0x200` is the synchronous-exception slot, pointing into empty flash, so the CPU fault-loops
+  forever. From outside it looks like a hang. Check with `make regs`.
 - **MMU off means all memory is Device memory**, which forbids unaligned access. An 8-byte load
-  from a 4-byte-aligned address raises an Alignment fault (ESR DFSC `0x21`). This restriction
-  disappears once the MMU is on, so it is a phase-specific trap.
-
-## Toolchain gaps hit so far
-
-- No `gdb`. `lldb` can talk to QEMU's stub via `gdb-remote localhost:1234` but expect to
-  translate tutorials that assume gdb.
+  from a 4-byte-aligned address raises an Alignment fault (ESR DFSC `0x21`). Disappears once the
+  MMU is on, so it is a phase-specific trap.
+- **QEMU is more lenient than the hardware.** It ignores the UART enable bit and the baud rate
+  entirely, so "it still prints" is never evidence that init is correct. Read the registers back
+  with `make mem` instead.
+- `-d int` logs every exception with its ESR; `-d in_asm` logs translated blocks.
 
 ## Roadmap
 
 Each step should end with the user able to explain what happened. Do not run ahead.
 
-1. QEMU basics - what a machine model is, boot an existing kernel, learn the monitor
-   (`Ctrl-A C`, `info registers`, `info mtree`).
-2. Smallest possible thing that runs: a few instructions in an ELF, observed under the
-   debugger. Nothing printed yet.
-3. Print a character by storing a byte to the UART address. This is the "hello world" of
-   bare metal.
-4. Linker script - understand where code, data, bss and the stack land, and why the entry
-   address must match what QEMU expects.
-5. Set up a stack, zero `.bss`, jump into Rust. First `#![no_std]` Rust that runs.
-6. A real UART driver (init, status register polling, read input as well as write).
-7. **Wozmon** - the user's chosen first real project. A port of Steve Wozniak's 256-byte Apple I
+1. ~~QEMU basics - machine models, the monitor.~~
+2. ~~Smallest thing that runs: a few instructions in an ELF, under the debugger.~~
+3. ~~Print a character by storing a byte to the UART address.~~
+4. ~~Linker script - where code, data, bss and the stack land.~~
+5. ~~Stack, `.bss` zeroing, jump into `#![no_std]` Rust.~~
+6. **A real UART driver** (init, status polling, read input as well as write). In progress.
+7. **Wozmon** - the user's chosen first real project. A port of Wozniak's 256-byte Apple I
    monitor (the one Ben Eater ports to his 6502): read a hex address over serial and print the
    byte, print a range, write bytes into memory, jump to an address and run it. Needs nothing
    but the UART. Becomes the interactive debugging console for every later step.
 8. Exceptions and interrupts - the vector table, timer interrupt, the GIC.
-9. Memory: physical memory map from the device tree, a bump allocator, then paging (MMU).
+9. Memory: physical map from the device tree, a bump allocator, then paging (MMU).
 10. Only then: tasks/scheduling, i.e. the first thing that resembles a kernel.
 
-## Where to look (primary sources)
+## Primary sources
 
-- QEMU `virt` machine docs: <https://www.qemu.org/docs/master/system/arm/virt.html> - which
-  devices exist and where.
-- The generated device tree (`dumpdtb` above, read with `dtc -I dtb -O dts`) - the machine's
-  own description of its memory map. Better than any tutorial for "what address is what".
-- **ARM PrimeCell UART (PL011) Technical Reference Manual**, ARM DDI 0183, on developer.arm.com.
-  The authoritative register layout. Chapter 3 "Programmer's Model" is the one that matters.
-- **QEMU's own model**: `hw/char/pl011.c` in the qemu source tree on GitHub. Ground truth for
-  what is *actually* emulated, as opposed to what the TRM requires. The two differ, and the
-  differences are exactly where "works in QEMU, dead on hardware" bugs come from.
-- `virt.dts` gives the base address and `apb-pclk` gives UARTCLK (24 MHz on this board).
-- ARM Architecture Reference Manual (ARMv8-A) - the CPU itself. Huge; read sections on demand,
-  never front to back.
-- `rust-osdev/embedded-rust` ecosystem, `cortex-a` crate source - useful to *read* for how
-  registers are accessed, not to depend on.
+- **ARM PrimeCell UART (PL011) TRM**, ARM DDI 0183, on developer.arm.com. Chapter 3
+  "Programmer's Model" has the register layout, bit fields, and reset values.
+- **`hw/char/pl011.c`** in the QEMU source. Ground truth for what is *actually* emulated, as
+  opposed to what the TRM requires. The gap between the two is where "works in QEMU, dead on
+  hardware" bugs come from.
+- `virt.dts` - the machine's own description of its memory map. Gives device base addresses, and
+  `apb-pclk` gives UARTCLK (24 MHz).
+- QEMU `virt` docs: <https://www.qemu.org/docs/master/system/arm/virt.html>
+- ARM Architecture Reference Manual (ARMv8-A) - the CPU itself. Read sections on demand.
 - OSDev wiki - good concepts, mostly x86-flavored, treat with care.
 
 Use the `find-docs` skill rather than recalling API details from memory.

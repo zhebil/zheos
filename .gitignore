@@ -2,6 +2,7 @@ target/
 
 *.o
 *.elf
+*.asm
 
 virt.dtb
 

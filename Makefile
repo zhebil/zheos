@@ -55,6 +55,12 @@ feed: kernel.elf
 dis: kernel.elf
 	$(BIN)/llvm-objdump -d $<
 
+# Disassembly with the Rust source interleaved, into a file you can scroll.
+# Needs debug = true in the release profile, which Cargo.toml sets.
+asm: kernel.elf
+	$(BIN)/llvm-objdump -d -S --no-show-raw-insn $< > kernel.asm
+	@echo "wrote kernel.asm ($$(grep -c . kernel.asm) lines)"
+
 sections: kernel.elf
 	$(BIN)/llvm-readobj --section-headers $<
 
@@ -74,6 +80,6 @@ kill:
 
 clean:
 	cargo clean
-	rm -f kernel.elf
+	rm -f kernel.elf kernel.asm
 
-.PHONY: kernel.elf run debug regs mem test-bss feed dis sections syms trace kill clean
+.PHONY: kernel.elf run debug regs mem test-bss feed dis asm sections syms trace kill clean

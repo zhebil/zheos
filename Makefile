@@ -7,7 +7,8 @@ CARGO_OUT := target/aarch64-unknown-none/release/zheos
 
 # cargo does its own change detection, so this always runs and is cheap.
 # kernel.elf is a copy so the debugger and QEMU have one stable path.
-CARGO_FLAGS ?=
+# Debug printing is opt-in. Add PRINT=1 to any target: make run PRINT=1
+CARGO_FLAGS := $(if $(PRINT),--features debug-print)
 
 kernel.elf:
 	cargo build --release $(CARGO_FLAGS)
@@ -65,9 +66,9 @@ asm: kernel.elf
 
 # .text with and without the debug-print feature.
 sizes:
-	@for f in "" "--no-default-features"; do \
+	@for f in "" "--features debug-print"; do \
 	  cargo build --release $$f >/dev/null 2>&1; \
-	  printf '%-22s .text = %s bytes\n' "$${f:-default}" \
+	  printf '%-24s .text = %s bytes\n' "$${f:-(no prints)}" \
 	    "$$($(BIN)/llvm-readobj --section-headers $(CARGO_OUT) | grep -A9 'Name: .text' | awk '/Size:/{print $$2; exit}')"; \
 	done
 

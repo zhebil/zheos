@@ -1,4 +1,4 @@
-use core::fmt::Write;
+use core::fmt::{Display, Write};
 
 mod reg {
     pub const DR: usize = 0x00; // Data Register
@@ -9,6 +9,7 @@ mod reg {
     pub const CR: usize = 0x30; // Control Register
     pub const IMSC: usize = 0x38; // Interrupt Mask Set/Clear Register
     pub const ICR: usize = 0x44; // Interrupt Clear Register
+    pub const RSR_ECR: usize = 0x04; // Recieve Status/Error Clear Register
 }
 
 mod fr {
@@ -29,6 +30,57 @@ mod cr {
 
 mod icr {
     pub const ALL_MASK: u32 = 0x7FF;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RxFlags(u32);
+
+impl RxFlags {
+    const DATA_BYTE_OFFSET: u32 = 8;
+    const FRAMING_ERROR: u32 = 1 << 0;
+    const PARITY_ERROR: u32 = 1 << 1;
+    const BREAK_ERROR: u32 = 1 << 2;
+    const OVERRUN_ERROR: u32 = 1 << 3;
+
+    pub const fn new(flags: u32) -> Self {
+        Self(flags)
+    }
+    pub const fn framing(self) -> bool {
+        self.0 & Self::FRAMING_ERROR != 0
+    }
+
+    pub const fn parity(self) -> bool {
+        self.0 & Self::PARITY_ERROR != 0
+    }
+
+    pub const fn brk(self) -> bool {
+        self.0 & Self::BREAK_ERROR != 0
+    }
+
+    pub const fn overrun(self) -> bool {
+        self.0 & Self::OVERRUN_ERROR != 0
+    }
+
+    pub const fn from_data(data: u32) -> Self {
+        Self::new(data >> Self::DATA_BYTE_OFFSET)
+    }
+}
+
+impl Display for RxFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RxFlags")
+            .field("framing", &self.framing())
+            .field("parity", &self.parity())
+            .field("brk", &self.brk())
+            .field("overrun", &self.overrun())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Received {
+    pub byte: u8,
+    pub flags: RxFlags,
 }
 
 pub struct UARTDriver {
@@ -78,21 +130,28 @@ impl UARTDriver {
     }
 
     #[allow(dead_code)]
-    pub fn try_getc(&self) -> Option<u8> {
+    pub fn try_getc(&self) -> Option<Received> {
         if self.has_byte() {
             let c = self.read_data();
-            Some(self.data_byte_mask(c))
+            let flags = RxFlags::from_data(c);
+            let byte = self.data_byte_mask(c);
+
+            Some(Received { byte, flags })
         } else {
             None
         }
     }
 
-    pub fn getc(&self) -> u8 {
+    pub fn getc(&self) -> Received {
         // Wait until FIFO is not empty
         while !self.has_byte() {}
         let c = self.read_data();
-        self.data_byte_mask(c)
+        let flags = RxFlags::from_data(c);
+        let byte = self.data_byte_mask(c);
+
+        Received { byte, flags }
     }
+
     pub fn flush(&self) {
         while self.read_register(reg::FR) & fr::BUSY != 0 {}
     }
@@ -122,6 +181,16 @@ impl UARTDriver {
 
     fn data_byte_mask(&self, c: u32) -> u8 {
         (c & 0xFF) as u8
+    }
+
+    #[allow(dead_code)]
+    fn read_error_status(&self) -> RxFlags {
+        RxFlags(self.read_register(reg::RSR_ECR))
+    }
+
+    #[allow(dead_code)]
+    fn clear_error_status(&self) {
+        self.write_register(reg::RSR_ECR, 0x00);
     }
 }
 

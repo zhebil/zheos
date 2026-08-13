@@ -40,7 +40,7 @@ pub extern "C" fn kmain() -> ! {
     let _ = writeln!(uart, "Type 'exit' to shutdown the system");
     let _ = writeln!(uart, "----------------------------------");
 
-    listen_for_exit(&uart);
+    listen_for_exit(&mut uart);
 
     let _ = writeln!(uart, "\n");
     let _ = writeln!(uart, "System is shutting down");
@@ -50,16 +50,20 @@ pub extern "C" fn kmain() -> ! {
     shutdown();
 }
 
-pub fn listen_for_exit(uart: &uart::UARTDriver) {
+pub fn listen_for_exit(uart: &mut uart::UARTDriver) {
     let mut matched = 0usize;
     loop {
         let c = uart.getc();
-        uart.putc(c);
+        if c.flags.framing() || c.flags.parity() || c.flags.overrun() || c.flags.brk() {
+            let _ = writeln!(uart, "ERROR! B:0x{:02x} F: {}", c.byte, c.flags);
+        } else {
+            uart.putc(c.byte);
+        }
 
-        if c == b"exit"[matched] {
+        if c.byte == b"exit"[matched] {
             matched += 1;
         } else {
-            matched = if c == b'e' { 1 } else { 0 };
+            matched = if c.byte == b'e' { 1 } else { 0 };
         }
 
         if matched == 4 {

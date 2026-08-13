@@ -7,8 +7,10 @@ CARGO_OUT := target/aarch64-unknown-none/release/zheos
 
 # cargo does its own change detection, so this always runs and is cheap.
 # kernel.elf is a copy so the debugger and QEMU have one stable path.
+CARGO_FLAGS ?=
+
 kernel.elf:
-	cargo build --release
+	cargo build --release $(CARGO_FLAGS)
 	@cp $(CARGO_OUT) $@
 
 run: kernel.elf
@@ -61,6 +63,14 @@ asm: kernel.elf
 	$(BIN)/llvm-objdump -d -S --no-show-raw-insn $< > kernel.asm
 	@echo "wrote kernel.asm ($$(grep -c . kernel.asm) lines)"
 
+# .text with and without the debug-print feature.
+sizes:
+	@for f in "" "--no-default-features"; do \
+	  cargo build --release $$f >/dev/null 2>&1; \
+	  printf '%-22s .text = %s bytes\n' "$${f:-default}" \
+	    "$$($(BIN)/llvm-readobj --section-headers $(CARGO_OUT) | grep -A9 'Name: .text' | awk '/Size:/{print $$2; exit}')"; \
+	done
+
 sections: kernel.elf
 	$(BIN)/llvm-readobj --section-headers $<
 
@@ -82,4 +92,4 @@ clean:
 	cargo clean
 	rm -f kernel.elf kernel.asm
 
-.PHONY: kernel.elf run debug regs mem test-bss feed dis asm sections syms trace kill clean
+.PHONY: kernel.elf run debug regs mem test-bss feed dis asm sizes sections syms trace kill clean

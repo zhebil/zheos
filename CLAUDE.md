@@ -16,10 +16,30 @@ memory, no BIOS, and no legacy modes - `-kernel` loads an ELF and the CPU starts
 point. The Ben Eater feel is preserved: the UART is a PL011 at `0x0900_0000`, and storing a
 byte there prints a character.
 
-**The roadmap and current state live in beads, not here.** `bd ready` shows what is actually
-next, `bd list` the whole plan, `bd show <id>` the details and the notes from when that piece
-was built. Do not duplicate any of it into this file - it will go stale. Do not run ahead of
-the current issue; each step should end with the user able to explain what happened.
+## The framing: a survival skill tree
+
+The project is run as a survival game. The machine starts with a CPU, some RAM, and a few
+devices at fixed addresses - no OS, no library, no `print`, no allocator. Every ability it
+ever has, the user builds. Each issue in beads is a **skill**; its dependencies are real
+technical prerequisites, not arbitrary ordering. `ROADMAP.md` is the map, `SKILLTREE.md` the
+mermaid diagram, and neither is authoritative - beads is.
+
+Use this framing when talking about progress. It is not decoration: it is why "one step at a
+time, and do not run ahead" is a rule rather than a preference. A skill is not unlocked until
+the user can explain it out loud.
+
+**Roadmap and current state live in beads, not in this file.**
+
+```sh
+bd ready            # skills unlockable right now
+bd list             # the whole tree
+bd show <id>        # what a skill is, plus notes from when it was built
+bd blocked          # what is still locked, and by what
+```
+
+Do not duplicate any of it here; it will go stale. Titles are prefixed by tier
+(`T0 ·`, `T1 ·`, `SIDE ·`) and labelled `tier-N` / `side-quest`. When a skill closes, update
+the colour classes in `SKILLTREE.md` to match.
 
 ## Working agreement (IMPORTANT - overrides default behavior)
 
@@ -177,27 +197,15 @@ bd close <id>         # Complete work
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, you MUST complete ALL steps below.
 
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd dolt push
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+4. **Clean up** - Clear stashes
+5. **Verify** - All changes committed
+6. **Hand off** - Provide context for next session
 
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->

@@ -1,3 +1,5 @@
+use core::fmt::Write;
+
 mod reg {
     pub const DR: usize = 0x00; // Data Register
     pub const FR: usize = 0x18; // Flag Register
@@ -120,5 +122,17 @@ impl UARTDriver {
 
     fn data_byte_mask(&self, c: u32) -> u8 {
         (c & 0xFF) as u8
+    }
+}
+
+impl Write for UARTDriver {
+    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
+        for c in s.as_bytes() {
+            if *c == b'\n' {
+                self.putc(b'\r');
+            }
+            self.putc(*c);
+        }
+        Ok(())
     }
 }

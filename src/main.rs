@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 
-use core::arch::{asm, global_asm};
+use core::{
+    arch::{asm, global_asm},
+    fmt::Write,
+};
 
 global_asm!(include_str!("kernel.s"));
 
@@ -14,14 +17,18 @@ fn panic_handler(_info: &core::panic::PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
-    let uart = uart::UARTDriver::new();
+    let mut uart = uart::UARTDriver::new();
     uart.init();
+
+    let _ = writeln!(uart, "Hello, ZheOS!");
+    let _ = writeln!(uart, "Test: {:#010x}", 42u32);
+    let _ = writeln!(uart, "Type 'exit' to shutdown the system");
+    let _ = writeln!(uart, "----------------------------------");
 
     listen_for_exit(&uart);
 
-    for b in b"t\nSee you later!" {
-        uart.putc(*b);
-    }
+    let _ = writeln!(uart, "\n");
+    let _ = writeln!(uart, "System is shutting down");
 
     uart.flush();
 
@@ -32,6 +39,8 @@ pub fn listen_for_exit(uart: &uart::UARTDriver) {
     let mut matched = 0usize;
     loop {
         let c = uart.getc();
+        uart.putc(c);
+
         if c == b"exit"[matched] {
             matched += 1;
         } else {
@@ -41,8 +50,6 @@ pub fn listen_for_exit(uart: &uart::UARTDriver) {
         if matched == 4 {
             break;
         }
-
-        uart.putc(c);
     }
 }
 

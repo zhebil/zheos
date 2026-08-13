@@ -1,26 +1,12 @@
 #![no_std]
 #![no_main]
 
-use core::arch::{asm, global_asm};
+use core::{
+    arch::{asm, global_asm},
+    fmt::Write,
+};
 
 global_asm!(include_str!("kernel.s"));
-
-/// writeln! that vanishes entirely without the `debug-print` feature, taking
-/// core::fmt with it. A runtime flag would not: the call has to not exist.
-#[macro_export]
-macro_rules! dprintln {
-    ($dst:expr $(, $($arg:tt)*)?) => {{
-        #[cfg(feature = "debug-print")]
-        {
-            use ::core::fmt::Write as _;
-            let _ = ::core::writeln!($dst $(, $($arg)*)?);
-        }
-        #[cfg(not(feature = "debug-print"))]
-        {
-            let _ = &mut $dst;
-        }
-    }};
-}
 
 #[panic_handler]
 fn panic_handler(_info: &core::panic::PanicInfo) -> ! {
@@ -34,15 +20,13 @@ pub extern "C" fn kmain() -> ! {
     let mut uart = uart::UARTDriver::new();
     uart.init();
 
-    dprintln!(uart, "Hello, ZheOS!");
-    dprintln!(uart, "Test: {:#010x}", 42u32);
-    dprintln!(uart, "Type 'exit' to shutdown the system");
-    dprintln!(uart, "----------------------------------");
+    let _ = writeln!(uart, "Hello, ZheOS!");
+    let _ = writeln!(uart, "Type 'exit' to shutdown the system");
+    let _ = writeln!(uart, "----------------------------------");
 
     listen_for_exit(&uart);
 
-    dprintln!(uart, "\n");
-    dprintln!(uart, "System is shutting down");
+    let _ = writeln!(uart, "System is shutting down");
 
     uart.flush();
 

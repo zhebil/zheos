@@ -13,9 +13,6 @@
     "editor.detectIndentation": false
   },
 
-  // Analyse with debug-print on, or the writeln! branch of dprintln! greys out.
-  "rust-analyzer.cargo.features": "all",
-
   "rust-analyzer.check.allTargets": false,
   "rust-analyzer.checkOnSave": true,
   "rust-analyzer.imports.granularity.enforce": true,

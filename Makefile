@@ -7,11 +7,8 @@ CARGO_OUT := target/aarch64-unknown-none/release/zheos
 
 # cargo does its own change detection, so this always runs and is cheap.
 # kernel.elf is a copy so the debugger and QEMU have one stable path.
-# Debug printing is opt-in. Add PRINT=1 to any target: make run PRINT=1
-CARGO_FLAGS := $(if $(PRINT),--features debug-print)
-
 kernel.elf:
-	cargo build --release $(CARGO_FLAGS)
+	cargo build --release
 	@cp $(CARGO_OUT) $@
 
 run: kernel.elf
@@ -64,14 +61,6 @@ asm: kernel.elf
 	$(BIN)/llvm-objdump -d -S --no-show-raw-insn $< > kernel.asm
 	@echo "wrote kernel.asm ($$(grep -c . kernel.asm) lines)"
 
-# .text with and without the debug-print feature.
-sizes:
-	@for f in "" "--features debug-print"; do \
-	  cargo build --release $$f >/dev/null 2>&1; \
-	  printf '%-24s .text = %s bytes\n' "$${f:-(no prints)}" \
-	    "$$($(BIN)/llvm-readobj --section-headers $(CARGO_OUT) | grep -A9 'Name: .text' | awk '/Size:/{print $$2; exit}')"; \
-	done
-
 sections: kernel.elf
 	$(BIN)/llvm-readobj --section-headers $<
 
@@ -93,4 +82,4 @@ clean:
 	cargo clean
 	rm -f kernel.elf kernel.asm
 
-.PHONY: kernel.elf run debug regs mem test-bss feed dis asm sizes sections syms trace kill clean
+.PHONY: kernel.elf run debug regs mem test-bss feed dis asm sections syms trace kill clean

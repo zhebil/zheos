@@ -91,6 +91,9 @@ impl UARTDriver {
         let c = self.read_data();
         self.data_byte_mask(c)
     }
+    pub fn flush(&self) {
+        while self.read_register(reg::FR) & fr::BUSY != 0 {}
+    }
 
     fn read_register(&self, offset: usize) -> u32 {
         let addr = (self.addr + offset) as *const u32;

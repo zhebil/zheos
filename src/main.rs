@@ -21,6 +21,8 @@ pub extern "C" fn kmain() -> ! {
         uart.putc(*b);
     }
 
+    uart.flush();
+
     shutdown();
 }
 

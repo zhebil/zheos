@@ -17,7 +17,10 @@ pub extern "C" fn kmain() -> ! {
         uart.putc(*b)
     }
 
-    loop {}
+    loop {
+        let c = uart.getc();
+        uart.putc(c);
+    }
 }
 
 mod uart;

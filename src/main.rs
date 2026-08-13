@@ -4,12 +4,28 @@
 use core::{
     arch::{asm, global_asm},
     fmt::Write,
+    panic::PanicInfo,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 global_asm!(include_str!("kernel.s"));
 
+static ALREADY_PANICKED: AtomicBool = AtomicBool::new(false);
+
 #[panic_handler]
-fn panic_handler(_info: &core::panic::PanicInfo) -> ! {
+fn panic_handler(info: &PanicInfo) -> ! {
+    let ap = ALREADY_PANICKED.load(Ordering::Relaxed);
+    if !ap {
+        ALREADY_PANICKED.store(true, Ordering::Relaxed);
+
+        let mut uart = uart::UARTDriver::new();
+        uart.init();
+        let _ = writeln!(uart, "ZheOS has panicked!");
+        let _ = writeln!(uart, "{}", info);
+
+        uart.flush();
+    }
+
     loop {
         unsafe { asm!("wfi") } // wait for interrupts
     }
@@ -26,6 +42,7 @@ pub extern "C" fn kmain() -> ! {
 
     listen_for_exit(&uart);
 
+    let _ = writeln!(uart, "\n");
     let _ = writeln!(uart, "System is shutting down");
 
     uart.flush();

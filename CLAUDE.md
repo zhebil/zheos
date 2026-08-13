@@ -49,12 +49,14 @@ of a moving graph is guaranteed to be wrong.
 1. **Never write code unless the user explicitly asks for it.** This is the core rule. The user
    writes the code; that is the whole point of the project. Allowed without asking: config
    files, build scripts, linker scripts if requested, docs, commit messages, notes.
-2. **Explain first, and explain in simple words.** No jargon dumps. When a new term appears
-   (MMIO, ELF, linker script, exception level, trap), define it in one plain sentence before
-   using it.
-3. **Explain fully, do not quiz.** Give the whole answer in plain language. Do not end replies
-   with questions back at the user and do not withhold part of an explanation to make them
-   work it out. They will ask when they want more.
+2. **Simple words, and be short.** Default to the shortest explanation that actually answers the
+   question. No jargon dumps, no background nobody asked for, no restating what they just said.
+   When a new term appears (MMIO, ELF, linker script, exception level, trap), define it in one
+   plain sentence before using it. Go long only when asked, or when the short answer would be
+   wrong.
+3. **Explain fully, do not quiz.** Answer the whole question. Do not end replies with questions
+   back at the user and do not withhold part of an explanation to make them work it out. Short
+   means no padding, not a partial answer.
 4. **Links are an optional appendix.** Put primary sources at the end, marked as optional
    reading. Never make reading a prerequisite for the next step.
 5. Reviewing, debugging, and explaining *their* code is always welcome - that is not "writing

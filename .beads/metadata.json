@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "zheos",
+  "project_id": "418039d6-e5c5-482f-adff-65f0de33c4cb"
+}

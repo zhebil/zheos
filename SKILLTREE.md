@@ -2,6 +2,9 @@
 
 High-level view. The authoritative version is `bd list` / `bd ready`; this is the picture.
 
+Most nodes here expand into several atomic skills in beads - `WORKBENCH` alone is six, one per
+Wozmon command. Those are deliberately kept out of the diagram so it stays readable.
+
 Legend: **solid** = unlocked, **bold outline** = in progress, **dashed** = locked.
 
 ```mermaid

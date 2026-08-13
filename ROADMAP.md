@@ -29,6 +29,11 @@ bd blocked          # what is still locked, and by what
 This file is the map you look at to remember why you are here. `bd ready` is the thing you
 actually act on. If the two ever disagree, beads is right.
 
+**Beads is finer-grained than this file.** A row in a table here is often several issues:
+"Wozmon" is six separate skills, one per command. That is deliberate - each one should be a
+single session's work, small enough to finish and understand. Start a session with `bd ready`
+and you get something buildable, not a project.
+
 Rules of the game:
 
 - **One skill at a time.** Do not run ahead. A skill is not unlocked until it is understood
@@ -62,7 +67,17 @@ Tier 0 is complete. The machine can run a Rust program and shout one string into
 | **CALIBRATE** | The PL011 init sequence: disable, flush, baud divisors, 8N1, enable | The device works to spec, not by QEMU's leniency. Real hardware would print nothing before this. |
 | **VOICE** | `putc` that checks the transmit FIFO before writing | Output that does not silently drop bytes. |
 | **EARS** | `getc`: poll the receive flag, read the data register | **Input.** The machine stops being a one-way broadcast and becomes interactive. |
+| **FLUSH** | Wait for `BUSY` to clear before halting | Your last message actually leaves the wire instead of dying in the FIFO. |
+| **RXERR** | Decode the framing, parity, break and overrun bits on receive | You find out when input was corrupted or dropped, instead of guessing. |
 | **LANGUAGE** | `impl core::fmt::Write` | `write!` with hex, padding and alignment, from `core`, with no allocator. |
+| **PANIC SPEAKS** | A panic handler that prints its message and location | A panic stops being indistinguishable from a hang. |
+
+Two survival utilities also sit here, unlocked by FOOTING rather than by the UART:
+
+| Skill | What it really is | What it unlocks |
+|---|---|---|
+| **IDLE** | `wfi` instead of `b .` in the park loop | The machine stops pinning a whole host CPU core while doing nothing. |
+| **SHUTDOWN** | PSCI `SYSTEM_OFF` via `HVC` | The kernel can end. Every scripted test terminates on its own instead of needing a kill. |
 
 EARS is the pivotal one in this tier. Everything before it is a program that talks at you.
 After it, the machine can be asked questions.
@@ -71,9 +86,15 @@ After it, the machine can be asked questions.
 
 | Skill | What it really is | What it unlocks |
 |---|---|---|
-| **WORKBENCH** | Wozmon - Wozniak's 256-byte Apple I monitor | Read memory, write memory, jump to an address, all from the serial line. |
+| **LINE** | Read a line with echo and backspace into a fixed buffer | Editable input. Everything above it assumes you can type a command and fix a typo. |
+| **HEX IN** | Parse hex text into a `u64` | Half of Wozmon. `core::fmt` already gives you the printing half. |
+| **PEEK** | Print the byte at an address | The machine becomes inspectable from its own console. |
+| **SCAN** | Print a range, in rows, each prefixed by its address | Reading structures, not single bytes. |
+| **POKE** | Write bytes into memory from typed hex | The console can now *change* the machine, not just watch it. |
+| **LEAP** | Cast an address to a function pointer and call it | Type machine code in hex and run it. This is why Wozmon mattered on the Apple I. |
+| **WORKBENCH** | Tie them together into Wozmon's real grammar | `ADDR`, `ADDR.ADDR`, `ADDR: XX XX`, `ADDR R`. |
 
-This is the first skill that exists to make *other* skills easier. Once WORKBENCH is up, every
+This is the first tier that exists to make *other* tiers easier. Once WORKBENCH is up, every
 later tier gets an interactive debugger that runs on the target itself, with no host tooling.
 Ben Eater ports this to his 6502 for exactly the same reason.
 
@@ -81,7 +102,11 @@ Ben Eater ports this to his 6502 for exactly the same reason.
 
 | Skill | What it really is | What it unlocks |
 |---|---|---|
-| **REFLEX** | Vector table in `VBAR_EL1`, the GIC, timer interrupts | The machine can react to things instead of only polling. Faults report themselves instead of hanging at `PC=0x200`. |
+| **VECTORS** | The exception vector table, installed in `VBAR_EL1` | Faults report their `ESR` and faulting address instead of hanging at `PC=0x200`. |
+| **GIC** | Distributor and CPU interface brought up | A device raising an interrupt actually reaches your handler. |
+| **TIMER** | The generic timer, reloaded on each tick | The first thing that happens without the program asking. |
+| **UART IRQ** | Receive interrupt draining the FIFO into a ring buffer | Input stops requiring the CPU's full attention. |
+| **REFLEX** | All four together | The machine reacts instead of polling. |
 
 This is where the CPU stops being a fast calculator and starts being something a kernel can be
 built on. Nothing above Tier 3 is possible without it: preemption, real I/O, and privilege
@@ -91,7 +116,11 @@ boundaries all ride on the exception mechanism.
 
 | Skill | What it really is | What it unlocks |
 |---|---|---|
-| **TERRITORY** | Read the memory map from the device tree, a bump allocator, then the MMU | Memory stops being one hardcoded constant and becomes a resource you manage. |
+| **DTB** | Parse the device tree QEMU leaves a pointer to in `x0` | The machine describes its own RAM instead of you hardcoding `0x40000000`. |
+| **BUMP** | The simplest allocator: a pointer that only moves forward | Memory you can hand out. Enough to build page tables with. |
+| **TABLES** | Build aarch64 translation tables | Virtual addresses exist, even if nothing uses them yet. |
+| **MMU ON** | `TTBR0_EL1`, `TCR_EL1`, `MAIR_EL1`, then the M bit | Real memory management. The instruction after the enable is fetched through translation, which makes it the most delicate moment in the project. |
+| **HEAP** | A `GlobalAlloc` so `extern crate alloc` works | `Box`, `Vec`, `String`. It stops feeling like assembly with extra steps. |
 
 Turning the MMU on also quietly removes the alignment restriction that bites while it is off,
 because memory stops being Device memory. Two milestones in one.
@@ -100,7 +129,9 @@ because memory stops being Device memory. Two milestones in one.
 
 | Skill | What it really is | What it unlocks |
 |---|---|---|
-| **MANY HANDS** | Tasks, context switching on the timer interrupt | More than one thing running. The first structure that genuinely deserves the word kernel. |
+| **SWITCH** | Save one context, restore another, return into different code | Two things can take turns. Assembly, unavoidably. |
+| **SCHED** | A task table and a timer handler that picks the next one | Preemption: tasks are switched without ever agreeing to it. |
+| **MANY HANDS** | Both together | More than one thing running. The first structure that genuinely deserves the word kernel. |
 
 Deliberately last. Everything below it is a prerequisite, and attempting it early is the
 classic way to build something that half works and cannot be debugged.

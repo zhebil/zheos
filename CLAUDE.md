@@ -16,10 +16,10 @@ memory, no BIOS, and no legacy modes - `-kernel` loads an ELF and the CPU starts
 point. The Ben Eater feel is preserved: the UART is a PL011 at `0x0900_0000`, and storing a
 byte there prints a character.
 
-**Current state:** milestones 1-5 done. Milestone 6 in progress - a real PL011 driver in
-`src/uart.rs`. `init` (disable, busy-wait, flush, baud divisors, 8N1 + FIFOs, mask interrupts,
-enable) and `putc` (poll TXFF, write DR) are done and verified by reading the registers back.
-`getc` is next.
+**The roadmap and current state live in beads, not here.** `bd ready` shows what is actually
+next, `bd list` the whole plan, `bd show <id>` the details and the notes from when that piece
+was built. Do not duplicate any of it into this file - it will go stale. Do not run ahead of
+the current issue; each step should end with the user able to explain what happened.
 
 ## Working agreement (IMPORTANT - overrides default behavior)
 
@@ -134,24 +134,6 @@ and `-m` changes only the size. Devices sit *below* RAM, the opposite of Ben's l
   with `make mem` instead.
 - `-d int` logs every exception with its ESR; `-d in_asm` logs translated blocks.
 
-## Roadmap
-
-Each step should end with the user able to explain what happened. Do not run ahead.
-
-1. ~~QEMU basics - machine models, the monitor.~~
-2. ~~Smallest thing that runs: a few instructions in an ELF, under the debugger.~~
-3. ~~Print a character by storing a byte to the UART address.~~
-4. ~~Linker script - where code, data, bss and the stack land.~~
-5. ~~Stack, `.bss` zeroing, jump into `#![no_std]` Rust.~~
-6. **A real UART driver** (init, status polling, read input as well as write). In progress.
-7. **Wozmon** - the user's chosen first real project. A port of Wozniak's 256-byte Apple I
-   monitor (the one Ben Eater ports to his 6502): read a hex address over serial and print the
-   byte, print a range, write bytes into memory, jump to an address and run it. Needs nothing
-   but the UART. Becomes the interactive debugging console for every later step.
-8. Exceptions and interrupts - the vector table, timer interrupt, the GIC.
-9. Memory: physical map from the device tree, a bump allocator, then paging (MMU).
-10. Only then: tasks/scheduling, i.e. the first thing that resembles a kernel.
-
 ## Primary sources
 
 - **ARM PrimeCell UART (PL011) TRM**, ARM DDI 0183, on developer.arm.com. Chapter 3
@@ -167,6 +149,11 @@ Each step should end with the user able to explain what happened. Do not run ahe
 
 Use the `find-docs` skill rather than recalling API details from memory.
 
+## Note on the block below
+
+`bd init` generated it and rewrites it, so do not edit inside the markers. One thing it gets
+wrong here: **this repo has no git remote.** Ignore its `git push` / `bd dolt push` steps -
+committing locally is the end of the workflow.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker

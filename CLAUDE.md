@@ -21,8 +21,8 @@ byte there prints a character.
 The project is run as a survival game. The machine starts with a CPU, some RAM, and a few
 devices at fixed addresses - no OS, no library, no `print`, no allocator. Every ability it
 ever has, the user builds. Each issue in beads is a **skill**; its dependencies are real
-technical prerequisites, not arbitrary ordering. `ROADMAP.md` is the map, `SKILLTREE.md` the
-mermaid diagram, and neither is authoritative - beads is.
+technical prerequisites, not arbitrary ordering. `ROADMAP.md` is the map, and it is not
+authoritative - beads is.
 
 Use this framing when talking about progress. It is not decoration: it is why "one step at a
 time, and do not run ahead" is a rule rather than a preference. A skill is not unlocked until
@@ -38,8 +38,11 @@ bd blocked          # what is still locked, and by what
 ```
 
 Do not duplicate any of it here; it will go stale. Titles are prefixed by tier
-(`T0 ·`, `T1 ·`, `SIDE ·`) and labelled `tier-N` / `side-quest`. When a skill closes, update
-the colour classes in `SKILLTREE.md` to match.
+(`T0 ·`, `T1 ·`, `SIDE ·`) and labelled `tier-N` / `side-quest`.
+
+If a diagram of the tree is ever wanted, generate it on demand from `bd list --json` - the
+dependency graph and the tier labels are all it needs. Do not commit one; a checked-in picture
+of a moving graph is guaranteed to be wrong.
 
 ## Working agreement (IMPORTANT - overrides default behavior)
 

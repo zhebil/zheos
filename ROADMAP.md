@@ -153,4 +153,6 @@ line does not.
 
 Run `bd ready`. That is the answer, always, and it is the only place this is written down.
 
-The visual version of this tree is in [SKILLTREE.md](SKILLTREE.md).
+Want to see the tree as a picture? Generate it from `bd list --json` when you want one. The
+dependency graph and the `tier-N` labels are enough to build a mermaid diagram from scratch,
+and a generated one is never out of date the way a committed one would be.

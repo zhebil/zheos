@@ -9,7 +9,7 @@ mod reg {
     pub const CR: usize = 0x30; // Control Register
     pub const IMSC: usize = 0x38; // Interrupt Mask Set/Clear Register
     pub const ICR: usize = 0x44; // Interrupt Clear Register
-    pub const RSR_ECR: usize = 0x04; // Recieve Status/Error Clear Register
+    pub const RSR_ECR: usize = 0x04; // Receive Status/Error Clear Register
 }
 
 mod fr {
@@ -68,12 +68,23 @@ impl RxFlags {
 
 impl Display for RxFlags {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("RxFlags")
-            .field("framing", &self.framing())
-            .field("parity", &self.parity())
-            .field("brk", &self.brk())
-            .field("overrun", &self.overrun())
-            .finish()
+        let mut any = false;
+        for (set, name) in [
+            (self.framing(), "FE"),
+            (self.parity(), "PE"),
+            (self.brk(), "BE"),
+            (self.overrun(), "OE"),
+        ] {
+            if set {
+                if any {
+                    f.write_str(" ")?;
+                }
+                f.write_str(name)?;
+                any = true;
+            }
+        }
+
+        if any { Ok(()) } else { f.write_str("none") }
     }
 }
 
@@ -134,7 +145,7 @@ impl UARTDriver {
         if self.has_byte() {
             let c = self.read_data();
             let flags = RxFlags::from_data(c);
-            let byte = self.data_byte_mask(c);
+            let byte = Self::data_byte_mask(c);
 
             Some(Received { byte, flags })
         } else {
@@ -147,7 +158,7 @@ impl UARTDriver {
         while !self.has_byte() {}
         let c = self.read_data();
         let flags = RxFlags::from_data(c);
-        let byte = self.data_byte_mask(c);
+        let byte = Self::data_byte_mask(c);
 
         Received { byte, flags }
     }
@@ -166,7 +177,6 @@ impl UARTDriver {
         unsafe { core::ptr::write_volatile(addr, data) }
     }
 
-    #[allow(dead_code)]
     fn read_data(&self) -> u32 {
         self.read_register(reg::DR)
     }
@@ -179,7 +189,7 @@ impl UARTDriver {
         self.read_register(reg::FR) & fr::RXFE == 0
     }
 
-    fn data_byte_mask(&self, c: u32) -> u8 {
+    const fn data_byte_mask(c: u32) -> u8 {
         (c & 0xFF) as u8
     }
 

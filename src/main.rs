@@ -7,7 +7,9 @@ global_asm!(include_str!("kernel.s"));
 
 #[panic_handler]
 fn panic_handler(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
+    loop {
+        unsafe { asm!("wfi") } // wait for interrupts
+    }
 }
 
 #[unsafe(no_mangle)]

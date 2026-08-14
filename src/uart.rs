@@ -66,28 +66,6 @@ impl RxFlags {
     }
 }
 
-impl Display for RxFlags {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut any = false;
-        for (set, name) in [
-            (self.framing(), "FE"),
-            (self.parity(), "PE"),
-            (self.brk(), "BE"),
-            (self.overrun(), "OE"),
-        ] {
-            if set {
-                if any {
-                    f.write_str(" ")?;
-                }
-                f.write_str(name)?;
-                any = true;
-            }
-        }
-
-        if any { Ok(()) } else { f.write_str("none") }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Received {
     pub byte: u8,
@@ -140,7 +118,6 @@ impl UARTDriver {
         self.write_data(c)
     }
 
-    #[allow(dead_code)]
     pub fn try_getc(&self) -> Option<Received> {
         if self.has_byte() {
             let c = self.read_data();
@@ -155,12 +132,11 @@ impl UARTDriver {
 
     pub fn getc(&self) -> Received {
         // Wait until FIFO is not empty
-        while !self.has_byte() {}
-        let c = self.read_data();
-        let flags = RxFlags::from_data(c);
-        let byte = Self::data_byte_mask(c);
-
-        Received { byte, flags }
+        loop {
+            if let Some(received) = self.try_getc() {
+                return received;
+            }
+        }
     }
 
     pub fn flush(&self) {
@@ -213,5 +189,27 @@ impl Write for UARTDriver {
             self.putc(*c);
         }
         Ok(())
+    }
+}
+
+impl Display for RxFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut any = false;
+        for (set, name) in [
+            (self.framing(), "FE"),
+            (self.parity(), "PE"),
+            (self.brk(), "BE"),
+            (self.overrun(), "OE"),
+        ] {
+            if set {
+                if any {
+                    f.write_str(" ")?;
+                }
+                f.write_str(name)?;
+                any = true;
+            }
+        }
+
+        if any { Ok(()) } else { f.write_str("none") }
     }
 }

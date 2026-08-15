@@ -59,15 +59,14 @@ impl<'a> Zhemon<'a> {
     fn handle_line(&mut self, parser: &mut Parser) -> () {
         loop {
             match parser.parse_next() {
-                Ok(command) => match command {
+                Ok(Some(command)) => match command {
                     ParsedCommand::SetAddress(address) => self.handle_set_address(address),
-                    ParsedCommand::Continue => continue,
                     ParsedCommand::ExamineOne(address) => self.handle_examine_one(address),
                     ParsedCommand::ExamineContinuing(end) => self.handle_examine_continuing(end),
                     ParsedCommand::StoreContinuing(byte) => self.handle_store_continuing(byte),
                     ParsedCommand::Run => self.handle_run(),
-                    ParsedCommand::Empty => break,
                 },
+                Ok(None) => break,
                 Err(err) => {
                     self.on_parse_error(err);
                     break;
@@ -164,8 +163,6 @@ enum ParsedCommand {
     ExamineContinuing(u64),
     StoreContinuing(u8),
     Run,
-    Continue,
-    Empty,
 }
 
 enum LineParseError {
@@ -203,45 +200,40 @@ impl<'a> Parser<'a> {
     }
 
     pub fn validate(&mut self) -> Result<(), LineParseError> {
-        loop {
-            match self.parse_next() {
-                Ok(ParsedCommand::Empty) => break,
-                Ok(_) => continue,
-                Err(err) => return Err(err),
-            }
-        }
+        while self.parse_next()?.is_some() {}
 
         Ok(())
     }
 
-    pub fn parse_next(&mut self) -> Result<ParsedCommand, LineParseError> {
-        self.cursor.consume_spaces();
+    pub fn parse_next(&mut self) -> Result<Option<ParsedCommand>, LineParseError> {
+        loop {
+            self.cursor.consume_spaces();
 
-        let first_char = self.cursor.peek();
-        if first_char.is_none() {
-            match self.mode {
-                Mode::Default => return Ok(ParsedCommand::Empty),
-                Mode::Set {
-                    any_byte_yet: false,
-                } => return Err(LineParseError::ExpectedAByte(self.cursor.pos)),
-                Mode::Set { any_byte_yet: true } => return Ok(ParsedCommand::Empty),
+            let Some(first_char) = self.cursor.peek() else {
+                return match self.mode {
+                    Mode::Set {
+                        any_byte_yet: false,
+                    } => Err(LineParseError::ExpectedAByte(self.cursor.pos)),
+                    _ => Ok(None),
+                };
+            };
+
+            let command = if hex::digit(first_char).is_none() {
+                self.parse_instruction()?
+            } else {
+                match self.mode {
+                    Mode::Default => Some(self.parse_address_command()?),
+                    Mode::Set { .. } => self.parse_set_command()?,
+                }
+            };
+
+            if command.is_some() {
+                return Ok(command);
             }
-        }
-
-        let first_char = first_char.unwrap();
-        let first_char_hex = hex::digit(first_char);
-
-        if first_char_hex.is_none() {
-            return Ok(self.parse_instruction()?);
-        }
-
-        match self.mode {
-            Mode::Default => self.parse_address_command(),
-            Mode::Set { .. } => self.parse_set_command(),
         }
     }
 
-    fn parse_set_command(&mut self) -> Result<ParsedCommand, LineParseError> {
+    fn parse_set_command(&mut self) -> Result<Option<ParsedCommand>, LineParseError> {
         let initial_pos = self.cursor.pos;
 
         let byte = self.parse_byte();
@@ -250,12 +242,12 @@ impl<'a> Parser<'a> {
             (Err(_), Mode::Set { any_byte_yet: true }) => {
                 self.cursor.set_pos(initial_pos);
                 self.mode = Mode::Default;
-                Ok(ParsedCommand::Continue)
+                Ok(None)
             }
             (Err(err), _) => Err(err),
             (Ok(byte), _) => {
                 self.mode = Mode::Set { any_byte_yet: true };
-                Ok(ParsedCommand::StoreContinuing(byte))
+                Ok(Some(ParsedCommand::StoreContinuing(byte)))
             }
         }
     }
@@ -295,26 +287,27 @@ impl<'a> Parser<'a> {
             })
     }
 
-    fn parse_instruction(&mut self) -> Result<ParsedCommand, LineParseError> {
+    fn parse_instruction(&mut self) -> Result<Option<ParsedCommand>, LineParseError> {
         match self.cursor.peek() {
             Some(b'.') => {
                 self.mode = Mode::Default;
                 self.cursor.advance(1);
                 self.cursor.consume_spaces();
                 let address = self.parse_address()?;
-                Ok(ParsedCommand::ExamineContinuing(address))
+                Ok(Some(ParsedCommand::ExamineContinuing(address)))
             }
+            // A colon only changes what the following digits mean; there is nothing to carry out.
             Some(b':') => {
                 self.cursor.advance(1);
                 self.mode = Mode::Set {
                     any_byte_yet: false,
                 };
-                Ok(ParsedCommand::Continue)
+                Ok(None)
             }
             Some(b'R' | b'r') => {
                 self.mode = Mode::Default;
                 self.cursor.advance(1);
-                Ok(ParsedCommand::Run)
+                Ok(Some(ParsedCommand::Run))
             }
             _ => {
                 self.cursor.advance(1);

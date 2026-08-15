@@ -148,9 +148,11 @@ and `-m` changes only the size. Devices sit *below* RAM, the opposite of Ben's l
 
 ## Debugging signatures
 
-- **`PC=0x200`** means a fault was taken with no handler installed. `VBAR_EL1` is 0 at reset and
-  `0x200` is the synchronous-exception slot, pointing into empty flash, so the CPU fault-loops
-  forever. From outside it looks like a hang. Check with `make regs`.
+- **`PC=0x200`** means a fault was taken *before* `install_vectors()` ran. `0x200` is the
+  synchronous-exception slot's offset, fixed by the architecture; QEMU leaves `VBAR_EL1` at 0, so
+  the slot resolves into empty flash and the CPU fault-loops forever. From outside it looks like
+  a hang. Check with `make regs`. After the vectors are installed a fault prints a report
+  instead, so seeing this again means the install was skipped or ran too late.
 - **MMU off means all memory is Device memory**, which forbids unaligned access. An 8-byte load
   from a 4-byte-aligned address raises an Alignment fault (ESR DFSC `0x21`). Disappears once the
   MMU is on, so it is a phase-specific trap.

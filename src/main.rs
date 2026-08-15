@@ -32,6 +32,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
 }
 
 mod console;
+mod exception;
 mod mem;
 mod uart;
 mod zhemon;
@@ -40,6 +41,8 @@ mod zhemon;
 pub extern "C" fn kmain() -> ! {
     let mut uart = uart::UARTDriver::new();
     uart.init();
+
+    exception::install_vectors();
 
     let _ = writeln!(uart, "Hello, ZheOS!");
     let _ = writeln!(uart, "Type 'exit' to shutdown the system");

@@ -76,15 +76,15 @@ pub struct UARTDriver {
     addr: usize,
 }
 
-impl UARTDriver {
-    const BASE: usize = 0x0900_0000;
+const BASE: usize = 0x0900_0000;
 
+impl UARTDriver {
     const UARTCLK: u32 = 24_000_000; // 24MHz
     const BAUD: u32 = 115_200;
     const SCALED_DIVISOR: u32 = (4 * Self::UARTCLK + Self::BAUD / 2) / Self::BAUD;
 
     pub const fn new() -> Self {
-        Self { addr: Self::BASE }
+        Self { addr: BASE }
     }
 
     pub fn init(&self) {
@@ -177,6 +177,11 @@ impl UARTDriver {
     #[allow(dead_code)]
     fn clear_error_status(&self) {
         self.write_register(reg::RSR_ECR, 0x00);
+    }
+
+    pub fn putc_unsafe(byte: u8) {
+        while unsafe { core::ptr::read_volatile((BASE + reg::FR) as *const u32) } & fr::TXFF != 0 {}
+        unsafe { core::ptr::write_volatile((BASE + reg::DR) as *mut u32, byte as u32) }
     }
 }
 

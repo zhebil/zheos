@@ -1,8 +1,13 @@
 use crate::uart;
 
 pub struct ReadlineResult<'a> {
-    pub buf: &'a mut [u8],
+    pub buf: &'a [u8],
     pub device_error: bool,
+}
+
+pub enum Line<'a> {
+    Ready(ReadlineResult<'a>),
+    Abandoned,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -52,7 +57,7 @@ impl InputChar {
     }
 }
 
-pub fn read_line<'a>(uart: &mut uart::UARTDriver, buf: &'a mut [u8]) -> Option<ReadlineResult<'a>> {
+pub fn read_line<'a>(uart: &mut uart::UARTDriver, buf: &'a mut [u8]) -> Line<'a> {
     let mut i = 0usize;
     let mut device_error = false;
 
@@ -80,7 +85,7 @@ pub fn read_line<'a>(uart: &mut uart::UARTDriver, buf: &'a mut [u8]) -> Option<R
             }
             InputChar::ESCAPE => {
                 write_new_line(uart);
-                return None;
+                return Line::Abandoned;
             }
             InputChar::Char(c) => {
                 if i < buf.len() {
@@ -91,7 +96,7 @@ pub fn read_line<'a>(uart: &mut uart::UARTDriver, buf: &'a mut [u8]) -> Option<R
             }
         }
     }
-    Some(ReadlineResult {
+    Line::Ready(ReadlineResult {
         buf: buf.get_mut(..i).unwrap_or(&mut []),
         device_error,
     })

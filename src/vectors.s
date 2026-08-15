@@ -60,6 +60,7 @@
 
 // The table itself. 2048-byte aligned because the CPU ignores the low 11 bits
 // of VBAR_EL1 - put it anywhere else and it silently reads the wrong address.
+.section .vectors, "ax"
                 .balign 2048
                 .global vector_table
 vector_table:
@@ -94,7 +95,7 @@ vector_table:
 
 // Out here we are past the table, so there is no 128-byte limit any more and
 // the code can be as long as it needs to be.
-
+.text
 sync_entry:
                 save_all_registers
                 // Safe to write registers now: the originals are on the stack.

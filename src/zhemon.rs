@@ -10,14 +10,16 @@ const PROMPT: u8 = b'\\';
 
 pub struct Zhemon<'a> {
     uart: &'a mut uart::UARTDriver,
-    current_address: u64,
+    last_address: u64,
+    next_address: u64,
 }
 
 impl<'a> Zhemon<'a> {
     pub fn new(uart: &'a mut uart::UARTDriver) -> Self {
         Self {
             uart,
-            current_address: 0,
+            last_address: 0,
+            next_address: 0,
         }
     }
 
@@ -78,19 +80,21 @@ impl<'a> Zhemon<'a> {
     }
 
     fn handle_set_address(&mut self, address: u64) {
-        self.current_address = address;
+        self.last_address = address;
+        self.next_address = address;
     }
 
     fn handle_examine_one(&mut self, address: u64) {
-        self.current_address = address;
+        self.last_address = address;
         let byte = mem::read_byte(address);
         let _ = write!(self.uart, "{:016x}: {:02x}\r\n", address, byte);
-        self.current_address += 1;
+        self.next_address = address + 1;
     }
 
     fn handle_examine_continuing(&mut self, end: u64) {
-        let start = self.current_address;
-        self.current_address = end + 1;
+        let start = self.next_address;
+        self.last_address = end;
+        self.next_address = end + 1;
 
         if start > end {
             return;
@@ -125,17 +129,17 @@ impl<'a> Zhemon<'a> {
     }
 
     fn handle_store_continuing(&mut self, byte: u8) {
-        mem::write_byte(self.current_address, byte);
-        self.current_address += 1;
+        mem::write_byte(self.next_address, byte);
+        self.next_address += 1;
     }
 
     fn handle_run(&mut self) {
-        if self.current_address % 4 != 0 {
+        if self.last_address % 4 != 0 {
             let _ = write!(self.uart, "Error: Address is not aligned");
             write_new_line(self.uart);
         } else {
             let f: extern "C" fn() =
-                unsafe { core::mem::transmute(self.current_address as *const ()) };
+                unsafe { core::mem::transmute(self.last_address as *const ()) };
             f()
         }
     }

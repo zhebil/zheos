@@ -32,6 +32,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
 }
 
 mod console;
+mod mem;
 mod uart;
 mod zhemon;
 

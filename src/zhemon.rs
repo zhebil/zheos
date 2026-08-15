@@ -1,15 +1,12 @@
-use crate::{console, uart};
+use crate::{console, mem, uart};
 use console::read_line;
 use core::fmt::Write;
-use core::ptr::{read_volatile, write_volatile};
 
 const INPUT_CHAR: char = '\\';
-const NEW_LINE: &str = "\r\n";
 
 pub struct Zhemon<'a> {
     uart: &'a mut uart::UARTDriver,
     current_address: u64,
-    line_buff: [u8; 128],
 }
 
 impl<'a> Zhemon<'a> {
@@ -17,15 +14,15 @@ impl<'a> Zhemon<'a> {
         Self {
             uart,
             current_address: 0,
-            line_buff: [0u8; 128],
         }
     }
 
     pub fn start(&mut self) -> () {
+        let mut line_buff = [0u8; 128];
         loop {
             self.put_prompt();
 
-            let line_res = read_line(self.uart, &mut self.line_buff);
+            let line_res = read_line(self.uart, &mut line_buff);
 
             if line_res.is_none() {
                 continue;
@@ -42,10 +39,7 @@ impl<'a> Zhemon<'a> {
                 return ();
             }
 
-            let mut parser = Parser::new();
-            parser.set_line(line.buf);
-
-            match parser.validate() {
+            match Parser::new(line.buf).validate() {
                 Ok(_) => {}
                 Err(err) => {
                     self.on_parse_error(err);
@@ -53,6 +47,7 @@ impl<'a> Zhemon<'a> {
                 }
             }
 
+            let mut parser = Parser::new(line.buf);
             self.handle_line(&mut parser);
         }
     }
@@ -73,7 +68,10 @@ impl<'a> Zhemon<'a> {
                     ParsedCommand::Run => self.handle_run(),
                     ParsedCommand::Empty => break,
                 },
-                Err(err) => self.on_parse_error(err),
+                Err(err) => {
+                    self.on_parse_error(err);
+                    break;
+                }
             }
         }
     }
@@ -84,7 +82,7 @@ impl<'a> Zhemon<'a> {
 
     fn handle_examine_one(&mut self, address: u64) -> () {
         self.current_address = address;
-        let byte = self.read_byte(address);
+        let byte = mem::read_byte(address);
         let _ = write!(self.uart, "{:016x}: {:02x}\r\n", address, byte);
         self.current_address += 1;
     }
@@ -117,15 +115,14 @@ impl<'a> Zhemon<'a> {
             }
 
             // Write bytes
-            let byte = self.read_byte(address);
+            let byte = mem::read_byte(address);
             let _ = write!(self.uart, " {:02x}", byte);
         }
         console::write_new_line(self.uart);
     }
 
     fn handle_store_continuing(&mut self, byte: u8) -> () {
-        self.write_byte(self.current_address, byte);
-
+        mem::write_byte(self.current_address, byte);
         self.current_address += 1;
     }
 
@@ -159,14 +156,6 @@ impl<'a> Zhemon<'a> {
         let _ = write!(self.uart, "Error: {}", description);
         console::write_new_line(self.uart);
     }
-
-    fn read_byte(&mut self, address: u64) -> u8 {
-        unsafe { read_volatile(address as *const u8) }
-    }
-
-    fn write_byte(&mut self, address: u64, byte: u8) -> () {
-        unsafe { write_volatile(address as *mut u8, byte) };
-    }
 }
 
 enum ParsedCommand {
@@ -196,84 +185,87 @@ const MAX_ADDRESS_DIGITS: usize = 16;
 const MAX_BYTE_DIGITS: usize = 2;
 
 struct Parser<'a> {
-    line: &'a [u8],
-    pos: usize,
-    is_set_operation: bool,
-    set_byte_at_least_once: bool,
+    cursor: Cursor<'a>,
+    mode: Mode,
+}
+
+enum Mode {
+    Default,
+    Set { any_byte_yet: bool },
 }
 
 impl<'a> Parser<'a> {
-    pub fn new() -> Self {
+    pub fn new(line: &'a [u8]) -> Self {
         Self {
-            line: &[],
-            pos: 0,
-            is_set_operation: false,
-            set_byte_at_least_once: false,
+            cursor: Cursor::new(line),
+            mode: Mode::Default,
         }
     }
 
-    pub fn set_line(&mut self, line: &'a [u8]) {
-        self.line = line;
-        self.reset_pos();
-    }
-
     pub fn validate(&mut self) -> Result<(), LineParseError> {
-        while let ParsedCommand::Empty = self.parse_next()? {}
+        loop {
+            match self.parse_next() {
+                Ok(ParsedCommand::Empty) => break,
+                Ok(_) => continue,
+                Err(err) => return Err(err),
+            }
+        }
 
-        self.reset_pos();
         Ok(())
     }
 
     pub fn parse_next(&mut self) -> Result<ParsedCommand, LineParseError> {
-        self.consume_spaces();
+        self.cursor.consume_spaces();
 
-        let first_char = self.peek();
+        let first_char = self.cursor.peek();
         if first_char.is_none() {
-            if self.is_set_operation && !self.set_byte_at_least_once {
-                return Err(LineParseError::ExpectedAByte(self.pos));
+            match self.mode {
+                Mode::Default => return Ok(ParsedCommand::Empty),
+                Mode::Set {
+                    any_byte_yet: false,
+                } => return Err(LineParseError::ExpectedAByte(self.cursor.pos)),
+                Mode::Set { any_byte_yet: true } => return Ok(ParsedCommand::Empty),
             }
-            return Ok(ParsedCommand::Empty);
         }
 
         let first_char = first_char.unwrap();
-        let first_char_hex = Self::to_hex_digit(first_char);
+        let first_char_hex = hex::digit(first_char);
 
         if first_char_hex.is_none() {
             return Ok(self.parse_instruction()?);
         }
 
-        if self.is_set_operation {
-            self.parse_set_command()
-        } else {
-            self.parse_address_command()
+        match self.mode {
+            Mode::Default => self.parse_address_command(),
+            Mode::Set { .. } => self.parse_set_command(),
         }
     }
 
     fn parse_set_command(&mut self) -> Result<ParsedCommand, LineParseError> {
-        let initial_pos = self.pos;
+        let initial_pos = self.cursor.pos;
 
         let byte = self.parse_byte();
 
-        // If we have already set a byte, next operation is not necessarily a set operation
-        if byte.is_err() && self.set_byte_at_least_once {
-            self.pos = initial_pos;
-            self.is_set_operation = false;
-            return Ok(ParsedCommand::Continue);
-        } else if byte.is_err() {
-            return Err(byte.unwrap_err());
+        match (byte, &self.mode) {
+            (Err(_), Mode::Set { any_byte_yet: true }) => {
+                self.cursor.set_pos(initial_pos);
+                self.mode = Mode::Default;
+                Ok(ParsedCommand::Continue)
+            }
+            (Err(err), _) => Err(err),
+            (Ok(byte), _) => {
+                self.mode = Mode::Set { any_byte_yet: true };
+                Ok(ParsedCommand::StoreContinuing(byte))
+            }
         }
-
-        let byte = byte?;
-
-        self.set_byte_at_least_once = true;
-
-        Ok(ParsedCommand::StoreContinuing(byte))
     }
 
     fn parse_address_command(&mut self) -> Result<ParsedCommand, LineParseError> {
         let address = self.parse_address()?;
 
-        if let Some(next_char) = self.peek_next() {
+        self.cursor.consume_spaces();
+
+        if let Some(next_char) = self.cursor.peek() {
             if Self::is_instruction(next_char) {
                 return Ok(ParsedCommand::SetAddress(address));
             }
@@ -282,41 +274,14 @@ impl<'a> Parser<'a> {
         Ok(ParsedCommand::ExamineOne(address))
     }
 
-    fn peek(&self) -> Option<u8> {
-        self.line.get(self.pos).map(|b| *b)
-    }
-
-    fn peek_offset(&self, offset: usize) -> Option<u8> {
-        self.line.get(self.pos + offset).map(|b| *b)
-    }
-
-    fn peek_next(&mut self) -> Option<u8> {
-        self.consume_spaces();
-        self.line.get(self.pos).map(|b| *b)
-    }
-
-    const fn append_hex_digit(number: u64, digit: u32) -> u64 {
-        number * 16 + digit as u64
-    }
-
-    const fn to_hex_digit(c: u8) -> Option<u32> {
-        (c as char).to_digit(16)
-    }
-
     const fn is_instruction(c: u8) -> bool {
         c == b':' || c == b'R' || c == b'r' || c == b'.'
-    }
-
-    fn consume_spaces(&mut self) {
-        while self.peek() == Some(b' ') {
-            self.pos += 1;
-        }
     }
 
     fn parse_byte(&mut self) -> Result<u8, LineParseError> {
         self.parse_hex_number(MAX_BYTE_DIGITS)
             .map_err(|e| match e {
-                HexParseError::NoDigits => LineParseError::ExpectedAByte(self.pos),
+                HexParseError::NoDigits => LineParseError::ExpectedAByte(self.cursor.pos),
                 HexParseError::TooLong(p) => LineParseError::ByteTooLong(p),
             })
             .and_then(|number| Ok(number as u8))
@@ -325,34 +290,35 @@ impl<'a> Parser<'a> {
     fn parse_address(&mut self) -> Result<u64, LineParseError> {
         self.parse_hex_number(MAX_ADDRESS_DIGITS)
             .map_err(|e| match e {
-                HexParseError::NoDigits => LineParseError::ExpectedAnAddress(self.pos),
+                HexParseError::NoDigits => LineParseError::ExpectedAnAddress(self.cursor.pos),
                 HexParseError::TooLong(p) => LineParseError::AddressTooLong(p),
             })
     }
 
     fn parse_instruction(&mut self) -> Result<ParsedCommand, LineParseError> {
-        match self.peek() {
+        match self.cursor.peek() {
             Some(b'.') => {
-                self.is_set_operation = false;
-                self.pos += 1;
-                self.consume_spaces();
+                self.mode = Mode::Default;
+                self.cursor.advance(1);
+                self.cursor.consume_spaces();
                 let address = self.parse_address()?;
                 Ok(ParsedCommand::ExamineContinuing(address))
             }
             Some(b':') => {
-                self.pos += 1;
-                self.is_set_operation = true;
-                self.set_byte_at_least_once = false;
+                self.cursor.advance(1);
+                self.mode = Mode::Set {
+                    any_byte_yet: false,
+                };
                 Ok(ParsedCommand::Continue)
             }
             Some(b'R' | b'r') => {
-                self.is_set_operation = false;
-                self.pos += 1;
+                self.mode = Mode::Default;
+                self.cursor.advance(1);
                 Ok(ParsedCommand::Run)
             }
             _ => {
-                self.pos += 1;
-                Err(LineParseError::UnexpectedCharacter(self.pos))
+                self.cursor.advance(1);
+                Err(LineParseError::UnexpectedCharacter(self.cursor.pos))
             }
         }
     }
@@ -362,24 +328,24 @@ impl<'a> Parser<'a> {
         let mut digits = 0;
 
         loop {
-            let c = self.peek_offset(digits);
+            let c = self.cursor.peek_offset(digits);
 
             if c.is_none() {
                 break;
             }
             let c = c.unwrap();
 
-            let hex_digit = Self::to_hex_digit(c);
+            let hex_digit = hex::digit(c);
 
             if hex_digit.is_none() {
                 break;
             }
 
             if digits >= max_digits {
-                return Err(HexParseError::TooLong(self.pos + digits));
+                return Err(HexParseError::TooLong(self.cursor.pos + digits));
             }
 
-            number = Self::append_hex_digit(number, hex_digit.unwrap());
+            number = hex::append(number, hex_digit.unwrap());
             digits += 1;
         }
 
@@ -387,14 +353,51 @@ impl<'a> Parser<'a> {
             return Err(HexParseError::NoDigits);
         }
 
-        self.pos += digits;
+        self.cursor.advance(digits);
 
         Ok(number)
     }
+}
 
-    fn reset_pos(&mut self) {
-        self.pos = 0;
-        self.is_set_operation = false;
-        self.set_byte_at_least_once = false;
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0 }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.pos).copied()
+    }
+
+    fn peek_offset(&self, offset: usize) -> Option<u8> {
+        self.bytes.get(self.pos + offset).copied()
+    }
+
+    fn consume_spaces(&mut self) {
+        while let Some(b' ') = self.peek() {
+            self.pos += 1;
+        }
+    }
+
+    fn advance(&mut self, amount: usize) {
+        self.pos += amount;
+    }
+
+    fn set_pos(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+}
+
+mod hex {
+    pub const fn digit(c: u8) -> Option<u32> {
+        (c as char).to_digit(16)
+    }
+
+    pub const fn append(number: u64, digit: u32) -> u64 {
+        number * 16 + digit as u64
     }
 }

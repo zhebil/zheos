@@ -72,11 +72,14 @@ Type an address on its own.
 
 ```
 \40000000
-40000000: 1F
+0000000040000000: 40
 ```
 
 The monitor prints the address, a colon, a space, and the byte at that address. The current
 address becomes the address you named.
+
+**DECISION** - addresses are always printed as 16 hex digits, padded with leading zeros, however
+few digits you typed. Every line of output is then the same width and the columns line up.
 
 ### 4.2 Examine a range
 
@@ -84,8 +87,8 @@ Type a start address, a dot, and an end address.
 
 ```
 \40000000.4000000F
-40000000: 1F 20 03 D5 00 00 80 D2
-40000008: E0 03 00 91 1F 20 03 D5
+0000000040000000: 40 01 00 58 1f 00 00 91
+0000000040000008: 40 01 00 58 61 01 00 58
 ```
 
 Every byte from the start address to the end address is printed, inclusive of both ends.
@@ -93,16 +96,18 @@ Every byte from the start address to the end address is printed, inclusive of bo
 **Layout of the output**
 
 - Eight bytes per row.
-- Each row begins with the address of its own first byte, then a colon and a space.
-- Bytes within a row are separated by a single space.
+- Each row begins with the address of its own first byte, then a colon.
+- Every byte is printed as a space and two hex digits, so each byte occupies three columns.
 - A row ends when the next address would be a multiple of eight. This means the **first** row
-  may be short, so that every following row starts at a round address and the columns line up.
+  may be short, so that every following row starts at a round address.
+- A short first row is padded on the left with blanks, three columns per byte it is missing, so
+  a byte's column tells you its offset within the row no matter which row it is on.
 
 ```
 \40000005.40000012
-40000005: 03 D5 00
-40000008: 00 80 D2 E0 03 00 91 1F
-40000010: 20 03 D5
+0000000040000005:                00 00 91
+0000000040000008: 40 01 00 58 61 01 00 58
+0000000040000010: 1f 00 01
 ```
 
 If the end address is below the start address, nothing is printed. It is not an error.
@@ -115,10 +120,10 @@ Type a dot and an end address, with no start address.
 
 ```
 \40000000
-40000000: 1F
+0000000040000000: 40
 \.4000000F
-40000001: 20 03 D5 00 00 80 D2
-40000008: E0 03 00 91 1F 20 03 D5
+0000000040000001:    01 00 58 1f 00 00 91
+0000000040000008: 40 01 00 58 61 01 00 58
 ```
 
 The range begins at the location **after** the current address and runs to the end address you
@@ -180,10 +185,13 @@ carried out left to right, and each one sees the current address left by the one
 That stores eight bytes and then runs them.
 
 ```
-\40000000 .40000020
+\40000000 40000008 40000010
 ```
 
-That examines one byte and then a range continuing from it.
+That examines three single bytes.
+
+Spaces carry no meaning, so `40000000 .40000020` and `40000000.40000020` are the same thing: one
+range, not an examine followed by a range.
 
 ---
 
@@ -193,33 +201,41 @@ That examines one byte and then a range continuing from it.
 anything in it is wrong, **nothing at all happens** - no memory is read, no memory is written,
 nothing is run - and the monitor says what was wrong and prints a fresh prompt.
 
-The message names the problem and the position in the line where it was found, counting from 1.
+**DECISION** - the report is two lines. First a caret on its own line, in the column of the
+character that is wrong, lined up under the line you just typed. Then the word `Error:` and what
+was wrong. Pointing beats counting: nobody should have to count columns to find their own typo.
 
 ```
 \40000000 Q
-? unexpected character at 10
+          ^
+Error: Unexpected character
 \4000000000000000000
-? address too long at 1
+                 ^
+Error: Address too long
 \40010000: DEAD
-? byte too long at 11
+             ^
+Error: Byte too long
 \40010000:
-? expected a byte at 10
+         ^
+Error: Expected a byte
 \.
-? expected an address at 2
+ ^
+Error: Expected an address
 ```
 
-The position is where the offending thing starts. For something missing off the end of the
-line, it is one past the last character typed.
+The caret sits under the first character that cannot be accepted. For something missing rather
+than wrong - a colon with no bytes, a dot with no address - it sits under the command character
+that wanted it.
 
 The five things that can be wrong:
 
-| message | what causes it |
-|---|---|
-| `? unexpected character at N` | a character that is not a hex digit, `.`, `:`, `R`, or a space |
-| `? address too long at N` | more than 16 hex digits run together where an address is expected |
-| `? byte too long at N` | more than 2 hex digits run together where a byte is expected |
-| `? expected a byte at N` | a colon with no bytes after it |
-| `? expected an address at N` | a dot with no address after it |
+| message | where the caret points | what causes it |
+|---|---|---|
+| `Unexpected character` | the character itself | anything that is not a hex digit, `.`, `:`, `R` or a space |
+| `Address too long` | the 17th digit | more than 16 hex digits run together where an address is expected |
+| `Byte too long` | the 3rd digit | more than 2 hex digits run together where a byte is expected |
+| `Expected a byte` | the colon | a colon with no bytes after it |
+| `Expected an address` | the dot | a dot with no address after it |
 
 This differs from the Apple I, which carried out each command as it read it and so could half
 execute a bad line. Checking first is safer on a machine where a bad address can stop everything
@@ -249,26 +265,29 @@ This is the point of the tool, not a shortcoming of it.
 Everything the user types is shown after a `\` prompt; everything else is the machine.
 
 ```
-ZheOS monitor
+Hello, ZheOS!
+Type 'exit' to shutdown the system
+----------------------------------
 \40000000
-40000000: 1F
+0000000040000000: 40
 \.4000001F
-40000001: 20 03 D5 00 00 80 D2
-40000008: E0 03 00 91 1F 20 03 D5
-40000010: 00 00 80 D2 E0 03 00 91
-40000018: 1F 20 03 D5 00 00 80 D2
+0000000040000001:    01 00 58 1f 00 00 91
+0000000040000008: 40 01 00 58 61 01 00 58
+0000000040000010: 1f 00 01 eb 62 00 00 54
+0000000040000018: 1f 84 00 f8 fd ff ff 17
 \40010000: 48 49
 \: 0A 00
 \40010000.40010003
-40010000: 48 49 0A 00
+0000000040010000: 48 49 0a 00
 \40010002
-40010002: 0A
+0000000040010002: 0a
 \: 21 00
 \40010000.40010004
-40010000: 48 49 0A 21 00
+0000000040010000: 48 49 0a 21 00
 \40020000: 20 00 80 D2 C0 03 5F D6 40020000 R
 \Q
-? unexpected character at 1
+ ^
+Error: Unexpected character
 \
 ```
 
@@ -283,8 +302,8 @@ run.
 
 1. A single address prints the right byte, checked against a value you can confirm another way.
 2. A range spanning several rows prints with correct row addresses, eight bytes to a row, the
-   first row short when the start address is not a multiple of eight, and no bytes missing or
-   repeated at the row joins.
+   first row short and left-padded when the start address is not a multiple of eight, and no
+   bytes missing or repeated at the row joins.
 3. `.END` on its own continues from where the last command stopped, starting one past it.
 4. Bytes written with `:` read back identically with a range examine.
 5. `:` on its own continues writing from where the last command stopped.
@@ -305,7 +324,7 @@ run.
 | address width | 4 hex digits | up to 16 |
 | backspace key | `_` | the Backspace key |
 | bad input | the line is carried out up to the mistake | nothing on the line is carried out |
-| error report | silence, a fresh prompt | a message naming the problem and its position |
+| error report | silence, a fresh prompt | a caret under the offending character and a message |
 | `R` with no address | not available | runs the current address |
 | line length | 127 characters | 128 |
 | letter case | upper only | either, on input |

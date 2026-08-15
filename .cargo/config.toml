@@ -1,2 +1,4 @@
 [build]
-target = "aarch64-unknown-none"
+# The -softfloat variant, not plain aarch64-unknown-none: that one enables neon,
+# and the CPU traps every FP/SIMD instruction at reset until CPACR_EL1.FPEN is set.
+target = "aarch64-unknown-none-softfloat"

@@ -3,7 +3,7 @@ QEMU   := qemu-system-aarch64
 QFLAGS := -M virt -cpu cortex-a72 -m 128M -nographic -kernel kernel.elf
 MON    := -M virt -cpu cortex-a72 -m 128M -display none -serial null -monitor stdio
 
-CARGO_OUT := target/aarch64-unknown-none/release/zheos
+CARGO_OUT := target/aarch64-unknown-none-softfloat/release/zheos
 
 # cargo does its own change detection, so this always runs and is cheap.
 # kernel.elf is a copy so the debugger and QEMU have one stable path.

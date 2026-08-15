@@ -31,6 +31,10 @@ fn panic_handler(info: &PanicInfo) -> ! {
     }
 }
 
+mod console;
+mod uart;
+mod zhemon;
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
     let mut uart = uart::UARTDriver::new();
@@ -40,18 +44,7 @@ pub extern "C" fn kmain() -> ! {
     let _ = writeln!(uart, "Type 'exit' to shutdown the system");
     let _ = writeln!(uart, "----------------------------------");
 
-    let mut buf = [0u8; 256];
-    loop {
-        let line = console::read_line(&mut uart, &mut buf);
-
-        if line.device_error || line.overrun {
-            // ignore
-        }
-
-        if line.buf == b"exit" {
-            break;
-        }
-    }
+    zhemon::Zhemon::new(&mut uart).start();
 
     shutdown()
 }
@@ -61,9 +54,6 @@ pub fn shutdown() -> ! {
         asm!("hvc #0", in("x0") 0x84000008u64, options(noreturn));
     }
 }
-
-mod console;
-mod uart;
 
 const fn bit_mask(bit: u32) -> u32 {
     1 << bit

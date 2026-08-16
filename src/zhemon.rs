@@ -86,7 +86,7 @@ impl<'a> Zhemon<'a> {
 
     fn handle_examine_one(&mut self, address: u64) {
         self.last_address = address;
-        let byte = mem::read_byte(address);
+        let byte = mem::read_byte(address as usize);
         let _ = write!(self.uart, "{:016x}: {:02x}\r\n", address, byte);
         self.next_address = address + 1;
     }
@@ -122,14 +122,14 @@ impl<'a> Zhemon<'a> {
             }
 
             // Write bytes
-            let byte = mem::read_byte(address);
+            let byte = mem::read_byte(address as usize);
             let _ = write!(self.uart, " {:02x}", byte);
         }
         write_new_line(self.uart);
     }
 
     fn handle_store_continuing(&mut self, byte: u8) {
-        mem::write_byte(self.next_address, byte);
+        mem::write_byte(self.next_address as usize, byte);
         self.next_address += 1;
     }
 

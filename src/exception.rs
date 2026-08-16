@@ -1,4 +1,4 @@
-use crate::uart;
+use crate::{print, println, uart};
 use core::{
     arch::{asm, global_asm},
     fmt::Write,
@@ -92,47 +92,43 @@ pub extern "C" fn handle_exception(
     } else {
         ALREADY_FAULTED.store(true, Ordering::Relaxed);
 
-        let mut uart = uart::UARTDriver::new();
-        uart.init();
-
-        let _ = writeln!(
-            uart,
+        println!(
             "Kind: {}",
             if kind == 1 { "unexpected slot" } else { "sync" }
         );
 
         let esr = ESR::new(esr_el1);
-        let _ = writeln!(uart, "Exception Syndrome Register: {:#018x}", esr_el1);
-        let _ = write!(uart, "Exception Syndrome Class: ");
+        println!("Exception Syndrome Register: {:#018x}", esr_el1);
+        print!("Exception Syndrome Class: ");
         match &esr.class {
             ESRClass::Unknown => {
-                let _ = writeln!(uart, "Unknown reason (undefined instruction)");
+                println!("Unknown reason (undefined instruction)");
             }
             ESRClass::DataAbortCurrentEL => {
-                let _ = writeln!(uart, "Data Abort Current EL");
+                println!("Data Abort Current EL");
             }
             ESRClass::InstrAbortCurrentEL => {
-                let _ = writeln!(uart, "Instruction Abort Current EL");
+                println!("Instruction Abort Current EL");
             }
             ESRClass::Brk => {
-                let _ = writeln!(uart, "Breakpoint");
+                println!("Breakpoint");
             }
             ESRClass::Other(val) => {
-                let _ = writeln!(uart, "Other {:#04x}", val);
+                println!("Other {:#04x}", val);
             }
         }
-        let _ = writeln!(uart, "Exception Syndrome Syndrome: {:#018x}", esr.syndrome);
+        println!("Exception Syndrome Syndrome: {:#018x}", esr.syndrome);
 
         if esr.class.has_fault_address() {
-            let _ = writeln!(uart, "Fault Address Register: {:#018x}", far_el1);
+            println!("Fault Address Register: {:#018x}", far_el1);
         }
 
-        let _ = writeln!(uart, "Exception Link Register: {:#018x}", elr_el1);
+        println!("Exception Link Register: {:#018x}", elr_el1);
 
         for (i, value) in unsafe { &*frame }.iter().enumerate() {
-            let _ = writeln!(uart, "x{}: {:#018x}", i, value);
+            println!("x{}: {:#018x}", i, value);
         }
-        uart.flush();
+        uart().flush();
     }
 
     loop {

@@ -83,7 +83,7 @@ impl UARTDriver {
     const BAUD: u32 = 115_200;
     const SCALED_DIVISOR: u32 = (4 * Self::UARTCLK + Self::BAUD / 2) / Self::BAUD;
 
-    pub const fn new() -> Self {
+    const fn new() -> Self {
         Self { addr: UART_BASE }
     }
 
@@ -187,7 +187,7 @@ impl UARTDriver {
     }
 }
 
-impl Write for UARTDriver {
+impl Write for &UARTDriver {
     fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
         for c in s.as_bytes() {
             if *c == b'\n' {
@@ -219,4 +219,10 @@ impl Display for RxFlags {
 
         if any { Ok(()) } else { f.write_str("none") }
     }
+}
+
+static UART: UARTDriver = UARTDriver::new();
+
+pub fn uart() -> &'static UARTDriver {
+    &UART
 }

@@ -64,8 +64,7 @@ pub extern "C" fn handle_interrupt() {
     match lookup_handler(intid) {
         Some(handler) => handler(intid),
         None => {
-            let mut uart = uart::UARTDriver::new();
-            let _ = writeln!(uart, "No handler for IRQ {}", intid);
+            let _ = writeln!(uart(), "No handler for IRQ {}", intid);
         }
     }
 

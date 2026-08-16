@@ -57,12 +57,12 @@ impl InputChar {
     }
 }
 
-pub fn read_line<'a>(uart: &mut uart::UARTDriver, buf: &'a mut [u8]) -> Line<'a> {
+pub fn read_line<'a>(buf: &'a mut [u8]) -> Line<'a> {
     let mut i = 0usize;
     let mut device_error = false;
 
     loop {
-        let c = uart.getc();
+        let c = uart().getc();
 
         if c.flags.framing() || c.flags.parity() || c.flags.overrun() || c.flags.brk() {
             device_error = true;
@@ -71,27 +71,27 @@ pub fn read_line<'a>(uart: &mut uart::UARTDriver, buf: &'a mut [u8]) -> Line<'a>
         match InputChar::from_byte(c.byte) {
             InputChar::NonPrintable => continue,
             InputChar::Newline => {
-                write_new_line(uart);
+                write_new_line();
                 break;
             }
             InputChar::Backspace => {
                 if i > 0 {
                     i -= 1;
                     for b in ERASE_SEQUENCE {
-                        uart.putc(*b);
+                        uart().putc(*b);
                     }
                 }
                 continue;
             }
             InputChar::ESCAPE => {
-                write_new_line(uart);
+                write_new_line();
                 return Line::Abandoned;
             }
             InputChar::Char(c) => {
                 if i < buf.len() {
                     buf[i] = c;
                     i += 1;
-                    uart.putc(c);
+                    uart().putc(c);
                 }
             }
         }
@@ -102,9 +102,9 @@ pub fn read_line<'a>(uart: &mut uart::UARTDriver, buf: &'a mut [u8]) -> Line<'a>
     })
 }
 
-pub fn write_new_line(uart: &mut uart::UARTDriver) {
-    uart.putc(b'\r');
-    uart.putc(b'\n');
+pub fn write_new_line() {
+    uart().putc(b'\r');
+    uart().putc(b'\n');
 }
 
 const ERASE_SEQUENCE: &[u8] = b"\x08\x20\x08";

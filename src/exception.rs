@@ -87,7 +87,7 @@ pub extern "C" fn handle_exception(
     // worth reporting - only the fact that it happened.
     if af {
         for byte in b"\r\n!! DOUBLE FAULT\r\n" {
-            uart::UARTDriver::putc_unsafe(*byte);
+            uart().putc(*byte);
         }
     } else {
         ALREADY_FAULTED.store(true, Ordering::Relaxed);

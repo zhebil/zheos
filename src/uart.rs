@@ -178,13 +178,6 @@ impl UARTDriver {
     fn clear_error_status(&self) {
         self.write_register(reg::RSR_ECR, 0x00);
     }
-
-    pub fn putc_unsafe(byte: u8) {
-        while unsafe { core::ptr::read_volatile((UART_BASE + reg::FR) as *const u32) } & fr::TXFF
-            != 0
-        {}
-        unsafe { core::ptr::write_volatile((UART_BASE + reg::DR) as *mut u32, byte as u32) }
-    }
 }
 
 impl Write for &UARTDriver {

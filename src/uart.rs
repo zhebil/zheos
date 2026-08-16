@@ -1,4 +1,5 @@
 use core::{
+    arch::asm,
     cell::UnsafeCell,
     fmt::{Display, Write},
 };
@@ -155,6 +156,7 @@ impl UARTDriver {
             if let Some(received) = INPUT_BUFFER.pop() {
                 return received;
             }
+            unsafe { asm!("wfi") }
         }
     }
 

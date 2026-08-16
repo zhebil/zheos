@@ -1,4 +1,4 @@
-use crate::{print, println, uart};
+use crate::{print, println, uart::uart};
 use core::{
     arch::{asm, global_asm},
     sync::atomic::{AtomicBool, Ordering},

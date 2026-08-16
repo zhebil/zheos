@@ -1,6 +1,10 @@
-use core::fmt::{Display, Write};
+use core::{
+    cell::UnsafeCell,
+    fmt::{Display, Write},
+};
 
 use crate::board::UART_BASE;
+use crate::irq;
 
 mod reg {
     pub const DR: usize = 0x00; // Data Register
@@ -32,6 +36,11 @@ mod cr {
 
 mod icr {
     pub const ALL_MASK: u32 = 0x7FF;
+}
+
+mod imsc {
+    pub const RX: u32 = crate::bit_mask(4);
+    pub const RT: u32 = crate::bit_mask(6);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -74,6 +83,13 @@ pub struct Received {
     pub flags: RxFlags,
 }
 
+impl Received {
+    const EMPTY: Self = Self {
+        byte: 0,
+        flags: RxFlags::new(0),
+    };
+}
+
 pub struct UARTDriver {
     addr: usize,
 }
@@ -106,10 +122,14 @@ impl UARTDriver {
 
         // Mask every interrupt, clear anything already pending
         self.write_register(reg::IMSC, 0);
-        self.write_register(reg::ICR, icr::ALL_MASK);
+        self.clear_interrupts();
 
         // Enable
         self.write_register(reg::CR, cr::ENABLE);
+    }
+
+    pub fn enable_interrupt(&self) {
+        self.write_register(reg::IMSC, imsc::RX | imsc::RT);
     }
 
     pub fn putc(&self, c: u8) {
@@ -131,12 +151,15 @@ impl UARTDriver {
     }
 
     pub fn getc(&self) -> Received {
-        // Wait until FIFO is not empty
         loop {
-            if let Some(received) = self.try_getc() {
+            if let Some(received) = INPUT_BUFFER.pop() {
                 return received;
             }
         }
+    }
+
+    pub fn clear_interrupts(&self) {
+        self.write_register(reg::ICR, icr::ALL_MASK);
     }
 
     pub fn flush(&self) {
@@ -218,4 +241,82 @@ static UART: UARTDriver = UARTDriver::new();
 
 pub fn uart() -> &'static UARTDriver {
     &UART
+}
+
+const RING_BUFFER_SIZE: usize = 256;
+
+struct InputRingBuffer {
+    buffer: [Received; RING_BUFFER_SIZE],
+    head: usize,
+    tail: usize,
+    full: bool,
+}
+
+impl InputRingBuffer {
+    const fn new() -> Self {
+        Self {
+            buffer: [Received::EMPTY; RING_BUFFER_SIZE],
+            head: 0,
+            tail: 0,
+            full: false,
+        }
+    }
+
+    fn push(&mut self, received: Received) {
+        if self.full {
+            return;
+        }
+        self.buffer[self.tail] = received;
+        self.tail = (self.tail + 1) % RING_BUFFER_SIZE;
+        self.full = self.tail == self.head;
+    }
+
+    fn pop(&mut self) -> Option<Received> {
+        if !self.full && self.tail == self.head {
+            return None;
+        }
+        let received = self.buffer[self.head];
+        self.head = (self.head + 1) % RING_BUFFER_SIZE;
+        self.full = false;
+        Some(received)
+    }
+}
+
+struct InputBuffer(UnsafeCell<InputRingBuffer>);
+
+// SAFETY: both methods below run inside irq::without_interrupts, and on one core
+// an interrupt is the only thing that can cut in, so a push and a pop can never
+// overlap. The masking is load-bearing here - unlike HandlerTable, whose two
+// sides simply never run in the same phase, push and pop both write head, tail
+// and full, and both are live at the same time.
+unsafe impl Sync for InputBuffer {}
+
+impl InputBuffer {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(InputRingBuffer::new()))
+    }
+
+    fn push(&self, received: Received) {
+        irq::without_interrupts(|| unsafe { (*self.0.get()).push(received) })
+    }
+
+    fn pop(&self) -> Option<Received> {
+        irq::without_interrupts(|| unsafe { (*self.0.get()).pop() })
+    }
+}
+
+static INPUT_BUFFER: InputBuffer = InputBuffer::new();
+
+pub const UART_INTID: u32 = 33;
+
+pub fn handle_interrupt(_intid: u32) {
+    let uart = uart();
+    uart.clear_interrupts();
+
+    // Drop on overflow: blocking here would mask interrupts forever, and the
+    // only thing that could drain the buffer is code that cannot run until we
+    // return.
+    while let Some(received) = uart.try_getc() {
+        INPUT_BUFFER.push(received);
+    }
 }

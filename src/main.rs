@@ -8,7 +8,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use crate::uart::uart;
+use crate::uart::{UART_INTID, uart};
 
 global_asm!(include_str!("kernel.s"));
 
@@ -53,6 +53,9 @@ pub extern "C" fn kmain() -> ! {
 
     gic::init();
     irq::register(0, irq0_handler);
+
+    irq::register(UART_INTID, uart::handle_interrupt);
+    uart().enable_interrupt();
 
     irq::unmask();
 

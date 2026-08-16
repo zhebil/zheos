@@ -12,11 +12,18 @@ mod distributor {
 
     const ISENABLER: usize = 0x100;
 
+    const ITARGETSR: usize = 0x800;
+
     // Mask for the number of interrupt lines
     const IT_LINES_NUMBER_MASK: u32 = 0x1F;
 
     // Number of interrupt lines per block
     const LINES_PER_BLOCK: u32 = 32;
+
+    // SGIs and PPIs are always delivered to the local core; only SPIs need routing.
+    const FIRST_SPI: u32 = 32;
+
+    const TARGET_CPU0: u8 = 0x01;
 
     pub fn init() {
         let typer = mem::read_32(BASE + TYPER);
@@ -38,6 +45,11 @@ mod distributor {
         let enable_addr = BASE + ISENABLER + block * 4;
 
         mem::write_32(enable_addr, 1 << bit);
+
+        // One byte per interrupt here, unlike the bit-per-interrupt ISENABLER above.
+        if intid >= FIRST_SPI {
+            mem::write_byte(BASE + ITARGETSR + intid as usize, TARGET_CPU0);
+        }
     }
 }
 

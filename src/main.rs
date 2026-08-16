@@ -37,6 +37,7 @@ mod exception;
 mod gic;
 mod irq;
 mod mem;
+mod std;
 mod uart;
 mod zhemon;
 

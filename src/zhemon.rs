@@ -1,4 +1,4 @@
-use crate::{console, mem, uart};
+use crate::{console, mem, print, println, uart};
 use console::{Line, read_line, write_new_line};
 use core::fmt::Write;
 use parser::{LineParseError, ParsedCommand, Parser};
@@ -8,16 +8,14 @@ mod parser;
 
 const PROMPT: u8 = b'\\';
 
-pub struct Zhemon<'a> {
-    uart: &'a mut uart::UARTDriver,
+pub struct Zhemon {
     last_address: u64,
     next_address: u64,
 }
 
-impl<'a> Zhemon<'a> {
-    pub fn new(uart: &'a mut uart::UARTDriver) -> Self {
+impl Zhemon {
+    pub fn new() -> Self {
         Self {
-            uart,
             last_address: 0,
             next_address: 0,
         }
@@ -28,14 +26,14 @@ impl<'a> Zhemon<'a> {
         loop {
             self.put_prompt();
 
-            let line_res = read_line(self.uart, &mut line_buff);
+            let line_res = read_line(&mut line_buff);
 
             let Line::Ready(line) = line_res else {
                 continue;
             };
 
             if line.device_error {
-                let _ = write!(self.uart, "\r\n!Device Error\r\n");
+                println!("Device Error");
                 continue;
             }
 
@@ -57,7 +55,7 @@ impl<'a> Zhemon<'a> {
     }
 
     fn put_prompt(&mut self) {
-        self.uart.putc(PROMPT);
+        uart().putc(PROMPT);
     }
 
     fn handle_line(&mut self, parser: &mut Parser) {
@@ -87,7 +85,7 @@ impl<'a> Zhemon<'a> {
     fn handle_examine_one(&mut self, address: u64) {
         self.last_address = address;
         let byte = mem::read_byte(address as usize);
-        let _ = write!(self.uart, "{:016x}: {:02x}\r\n", address, byte);
+        println!("{:016x}: {:02x}", address, byte);
         self.next_address = address + 1;
     }
 
@@ -106,26 +104,26 @@ impl<'a> Zhemon<'a> {
 
             // Start new line if needed
             if !is_start && carry == 0 {
-                write_new_line(self.uart);
+                write_new_line();
             }
 
             // Write address
             if carry == 0 || is_start {
-                let _ = write!(self.uart, "{:016x}:", address);
+                print!("{:016x}:", address);
             }
 
             // Align start bytes
             if is_start && carry != 0 {
                 for _ in 1..=carry {
-                    let _ = write!(self.uart, "   ");
+                    print!("   ");
                 }
             }
 
             // Write bytes
             let byte = mem::read_byte(address as usize);
-            let _ = write!(self.uart, " {:02x}", byte);
+            print!(" {:02x}", byte);
         }
-        write_new_line(self.uart);
+        write_new_line();
     }
 
     fn handle_store_continuing(&mut self, byte: u8) {
@@ -135,8 +133,7 @@ impl<'a> Zhemon<'a> {
 
     fn handle_run(&mut self) {
         if self.last_address % 4 != 0 {
-            let _ = write!(self.uart, "Error: Address is not aligned");
-            write_new_line(self.uart);
+            println!("Error: Address is not aligned");
         } else {
             let f: extern "C" fn() =
                 unsafe { core::mem::transmute(self.last_address as *const ()) };
@@ -154,14 +151,12 @@ impl<'a> Zhemon<'a> {
         };
 
         for _ in 0..position {
-            self.uart.putc(b' ');
+            uart().putc(b' ');
         }
 
-        self.uart.putc(b'^');
-        write_new_line(self.uart);
+        uart().putc(b'^');
+        write_new_line();
 
-        let _ = self.uart.write_str("Error: ");
-        let _ = self.uart.write_str(description);
-        write_new_line(self.uart);
+        println!("Error: {}", description);
     }
 }

@@ -8,6 +8,8 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use crate::uart::uart;
+
 global_asm!(include_str!("kernel.s"));
 
 static ALREADY_PANICKED: AtomicBool = AtomicBool::new(false);
@@ -18,12 +20,10 @@ fn panic_handler(info: &PanicInfo) -> ! {
     if !ap {
         ALREADY_PANICKED.store(true, Ordering::Relaxed);
 
-        let mut uart = uart::UARTDriver::new();
-        uart.init();
-        let _ = writeln!(uart, "ZheOS has panicked!");
-        let _ = writeln!(uart, "{}", info);
+        let _ = writeln!(uart(), "ZheOS has panicked!");
+        let _ = writeln!(uart(), "{}", info);
 
-        uart.flush();
+        uart().flush();
     }
 
     loop {
@@ -42,15 +42,12 @@ mod uart;
 mod zhemon;
 
 pub fn irq0_handler(intid: u32) {
-    let mut uart = uart::UARTDriver::new();
-
-    let _ = writeln!(uart, "Received interrupt {}", intid);
+    let _ = writeln!(uart(), "Received interrupt {}", intid);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
-    let mut uart = uart::UARTDriver::new();
-    uart.init();
+    uart().init();
 
     exception::install_vectors();
 
@@ -59,11 +56,11 @@ pub extern "C" fn kmain() -> ! {
 
     irq::unmask();
 
-    let _ = writeln!(uart, "Hello, ZheOS!");
-    let _ = writeln!(uart, "Type 'exit' to shutdown the system");
-    let _ = writeln!(uart, "----------------------------------");
+    let _ = writeln!(uart(), "Hello, ZheOS!");
+    let _ = writeln!(uart(), "Type 'exit' to shutdown the system");
+    let _ = writeln!(uart(), "----------------------------------");
 
-    zhemon::Zhemon::new(&mut uart).start();
+    zhemon::Zhemon::new().start();
 
     shutdown()
 }

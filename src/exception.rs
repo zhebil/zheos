@@ -1,7 +1,6 @@
 use crate::{print, println, uart};
 use core::{
     arch::{asm, global_asm},
-    fmt::Write,
     sync::atomic::{AtomicBool, Ordering},
 };
 

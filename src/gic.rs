@@ -18,12 +18,7 @@ mod distributor {
     // Number of interrupt lines per block
     const LINES_PER_BLOCK: u32 = 32;
 
-    #[derive(Debug)]
-    pub enum InitError {
-        InvalidTyper,
-    }
-
-    pub fn init() -> Result<(), InitError> {
+    pub fn init() {
         let typer = mem::read_32(BASE + TYPER);
 
         let it_lines_number = typer & IT_LINES_NUMBER_MASK;
@@ -31,14 +26,10 @@ mod distributor {
         // Number of interrupt lines
         let n = LINES_PER_BLOCK * (it_lines_number + 1);
 
-        // Validate that the number of interrupt lines is within the valid range
-        if n == 0 || n > 1020 {
-            return Err(InitError::InvalidTyper);
-        }
+        assert!(n >= 32, "GICD_TYPER read {typer:#x} - wrong base?");
 
         // Enable distributor
         mem::write_32(BASE + CTLR, 1);
-        Ok(())
     }
 
     pub fn enable(intid: u32) {
@@ -91,12 +82,10 @@ mod cpu {
     }
 }
 
-pub fn init() -> Result<(), ()> {
-    distributor::init().map_err(|_| ())?;
+pub fn init() {
+    distributor::init();
 
     cpu::init();
-
-    Ok(())
 }
 
 #[must_use]

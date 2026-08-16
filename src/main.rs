@@ -40,6 +40,12 @@ mod mem;
 mod uart;
 mod zhemon;
 
+pub fn irq0_handler(intid: u32) {
+    let mut uart = uart::UARTDriver::new();
+
+    let _ = writeln!(uart, "Received interrupt {}", intid);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
     let mut uart = uart::UARTDriver::new();
@@ -48,6 +54,7 @@ pub extern "C" fn kmain() -> ! {
     exception::install_vectors();
 
     gic::init();
+    irq::register(0, irq0_handler);
 
     irq::unmask();
 

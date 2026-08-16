@@ -1,4 +1,4 @@
-use crate::{console, mem, print, println, uart};
+use crate::{console, mem, print, println, uart::uart};
 use console::{Line, read_line, write_new_line};
 use parser::{LineParseError, ParsedCommand, Parser};
 

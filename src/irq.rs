@@ -1,5 +1,5 @@
 use crate::gic;
-use crate::uart;
+use crate::uart::uart;
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::fmt::Write;

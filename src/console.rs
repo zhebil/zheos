@@ -1,4 +1,4 @@
-use crate::uart;
+use crate::uart::uart;
 
 pub struct ReadlineResult<'a> {
     pub buf: &'a [u8],

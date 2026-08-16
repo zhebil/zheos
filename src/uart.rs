@@ -1,5 +1,7 @@
 use core::fmt::{Display, Write};
 
+use crate::board::UART_BASE;
+
 mod reg {
     pub const DR: usize = 0x00; // Data Register
     pub const FR: usize = 0x18; // Flag Register
@@ -76,15 +78,13 @@ pub struct UARTDriver {
     addr: usize,
 }
 
-const BASE: usize = 0x0900_0000;
-
 impl UARTDriver {
     const UARTCLK: u32 = 24_000_000; // 24MHz
     const BAUD: u32 = 115_200;
     const SCALED_DIVISOR: u32 = (4 * Self::UARTCLK + Self::BAUD / 2) / Self::BAUD;
 
     pub const fn new() -> Self {
-        Self { addr: BASE }
+        Self { addr: UART_BASE }
     }
 
     pub fn init(&self) {
@@ -180,8 +180,10 @@ impl UARTDriver {
     }
 
     pub fn putc_unsafe(byte: u8) {
-        while unsafe { core::ptr::read_volatile((BASE + reg::FR) as *const u32) } & fr::TXFF != 0 {}
-        unsafe { core::ptr::write_volatile((BASE + reg::DR) as *mut u32, byte as u32) }
+        while unsafe { core::ptr::read_volatile((UART_BASE + reg::FR) as *const u32) } & fr::TXFF
+            != 0
+        {}
+        unsafe { core::ptr::write_volatile((UART_BASE + reg::DR) as *mut u32, byte as u32) }
     }
 }
 

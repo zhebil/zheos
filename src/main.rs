@@ -33,6 +33,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
 
 mod console;
 mod exception;
+mod gic;
 mod mem;
 mod uart;
 mod zhemon;
@@ -43,6 +44,8 @@ pub extern "C" fn kmain() -> ! {
     uart.init();
 
     exception::install_vectors();
+
+    gic::init().unwrap();
 
     let _ = writeln!(uart, "Hello, ZheOS!");
     let _ = writeln!(uart, "Type 'exit' to shutdown the system");

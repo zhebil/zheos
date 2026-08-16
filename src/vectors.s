@@ -58,7 +58,7 @@
 .endm
 
 .macro  restore_all_registers
-                ldp     x30, x31, [sp, #16 * 15]
+                ldr     x30,      [sp, #16 * 15]
                 ldp     x28, x29, [sp, #16 * 14]
                 ldp     x26, x27, [sp, #16 * 13]
                 ldp     x24, x25, [sp, #16 * 12]

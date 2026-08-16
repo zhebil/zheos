@@ -8,11 +8,12 @@ to go deal with it. **GIC** stands for Generic Interrupt Controller. It is the c
 every device and the CPU, deciding what gets through. Devices do not wire into the CPU directly.
 They all wire into the GIC.
 
-This task is one thing: turn that chip on and prove something reaches your handler. No device work.
-No useful handler yet. Just make the wire live.
+This task was one thing: turn that chip on and prove something reaches your handler. No device work.
+No useful handler yet. Just make the wire live. That is now done.
 
-This document is what you need to know before writing `src/gic.rs`. It describes the hardware, not
-the code.
+Sections 1 and 4-10 describe the hardware and do not change. Sections 2, 11 and 12 describe the code
+as it stands, and sections 13-14 are the tests and the failure table, both updated with what actually
+happened rather than what was expected.
 
 ---
 
@@ -54,48 +55,61 @@ level-sensitive interrupt without silencing the device, it fires again immediate
 
 ## 2. Where you are now
 
-Three pieces already exist, and they nearly join up.
+An interrupt reaches Rust and the interrupted code carries on. Four pieces carry it.
 
-**`src/uart.rs` polls.** `getc` at line 133 spins on `try_getc` until a byte turns up. Works, costs a
-whole core. `init` at line 90 already masks every UART interrupt (`IMSC = 0`) and clears anything
-pending (`ICR = ALL_MASK`), so the UART is in a clean state and is not currently shouting at anyone.
+**`src/vectors.s` has its own IRQ path.** The slot at offset `0x280` points at `irq_entry`, which
+saves x0-x30, calls `handle_interrupt`, restores them, and `eret`s. Separate from `unexpected_entry`,
+which still exists and still parks forever - correct for a fault, fatal for something that happens
+sixty times a second.
 
-**`src/exception.rs` installs the vector table.** `install_vectors` writes the table's address into
-`VBAR_EL1` and issues an `isb`. The receiving end of an interrupt is built.
+**`src/gic.rs` is the driver and knows only registers.** `init`, `enable(intid)`, `acknowledge`, and
+an `Interrupt` value that owns the raw `IAR` word. It never touches `DAIF` and never prints.
 
-**`src/vectors.s` has a slot for IRQ, and it is wrong for the job.** Line 78:
+**`src/irq.rs` is the policy.** A table of 64 handler slots, `register(intid, handler)` that fills a
+slot and then enables the line, `unmask()` that clears `PSTATE.I`, and the one `handle_interrupt`
+that the assembly calls.
+
+**`src/board.rs` holds the base addresses**, so no driver contains an address literal.
+
+`kmain` runs them as five phases, and the order is load-bearing:
 
 ```
-                vector_slot unexpected_entry    // 0x280  IRQ
+uart.init()                    so failures are visible
+install_vectors()              so faults report instead of hanging at PC=0x200
+gic::init()                    controller live, CPU still masked
+irq::register(...)             devices claim their interrupt numbers
+irq::unmask()                  last, deliberately
 ```
 
-An IRQ taken today lands in `unexpected_entry`, which saves the registers, sets `x3 = 1`, and calls
-`handle_exception` - a function whose return type is `!`. It prints a fault report and parks in
-`loop { wfi }`. Correct behaviour for something that should never happen. Fatal for something that
-happens sixty times a second.
+Registration sits between the controller coming up and the core accepting, and that gap is the whole
+reason the two calls are separate.
 
-So the shape of the work is: bring the GIC up, and give the IRQ slot a path that *returns*.
+**`src/uart.rs` still polls.** `getc` spins on `try_getc` until a byte turns up. `init` masks every
+UART interrupt (`IMSC = 0`) and clears anything pending (`ICR = ALL_MASK`), so the UART is in a clean
+state and is not shouting at anyone. Changing that is UART IRQ, not this skill.
 
 ---
 
 ## 3. The five gates
 
-Between the UART receiving a byte and your Rust code running, there are five switches. Right now
-three of them are off.
+Between the UART receiving a byte and your Rust code running, there are five switches. Four are now
+open.
 
-1. **The device's own interrupt enable.** The UART's `IMSC` register. Off - your `init` sets it to 0.
-2. **The distributor: is this INTID enabled?** Off - reset state.
-3. **The distributor: which core does it go to?** For the UART, unset - reset state.
-4. **The CPU interface: is it enabled, and does it pass the priority mask?** Off, and the mask blocks
-   everything - reset state.
-5. **The core: is `PSTATE.I` clear?** Off - the CPU boots with IRQ masked.
+1. **The device's own interrupt enable.** The UART's `IMSC` register. **Still off** - `uart::init`
+   sets it to 0. This is the one gate this skill does not touch.
+2. **The distributor: is this INTID enabled?** Open, per interrupt, by `gic::enable` writing
+   `ISENABLER` - called from `irq::register`, so enabling and having a handler are the same act.
+3. **The distributor: which core does it go to?** `gic::enable` writes `ITARGETSR` for SPIs. On this
+   machine that write does nothing (see section 6); it exists for the day there is a second core.
+4. **The CPU interface: is it enabled, and does it pass the priority mask?** Open - `cpu::init` sets
+   `GICC_CTLR` bit 0 and `GICC_PMR` to `0xFF`.
+5. **The core: is `PSTATE.I` clear?** Open - `irq::unmask()`, last phase of `kmain`.
 
 Five gates, and a shut gate at any one of them produces exactly the same symptom: nothing. No fault,
 no message, no hint. This is the single most frustrating thing about interrupt bring-up, and it is
-why the test at the end of this document matters more than usual.
+why the test in section 13 matters more than usual.
 
-This task is gates 2 through 5. Gate 1 belongs to UART IRQ and TIMER, which is why beads has both
-blocked on this one.
+Gate 1 belongs to UART IRQ and TIMER, which is why beads had both blocked on this one.
 
 ---
 
@@ -227,11 +241,18 @@ And for the timer, INTID 30 (a PPI):
 | Priority | `0x0800_041E` | the whole byte |
 | Target core | n/a | PPIs are private; `ITARGETSR` is read-only here and always means "this core" |
 
-**The gotcha in this table is `ITARGETSR`.** For SPIs it resets to 0 - target no cores. Enable INTID
-33, set its priority, forget the target byte, and the distributor accepts the interrupt and then
-routes it nowhere. Everything looks configured and nothing ever arrives. The first 32 bytes of
-`ITARGETSR` (the SGIs and PPIs) are read-only, which is a useful tell that this register only ever
-concerns SPIs.
+**`ITARGETSR` is a trap, but not the one it looks like.** Read it on this machine and every byte is
+zero, which reads as "target no cores" and looks exactly like a bug waiting to happen. It is not. On
+a **uniprocessor** GIC the whole register is read-as-zero, write-ignored - there is one core, every
+interrupt implicitly targets it, and the register has nothing to express. Writes are silently
+discarded and reads always give 0 no matter what you do.
+
+Verified both ways: booting the same kernel under `-smp 2` makes the identical byte write stick and
+read back. So the code that writes it is correct and completely inert here, and becomes necessary the
+moment there is a second core - at which point an SPI with a zero target really does go nowhere.
+
+The first 32 bytes (the SGIs and PPIs) are read-only even on a multicore GIC, which is a useful tell
+that this register only ever concerns SPIs.
 
 ---
 
@@ -271,10 +292,13 @@ why the default is that way rather than filing it as an arbitrary magic number: 
 a *safe* state. A controller that woke up passing every interrupt to a core that has not yet
 installed a vector table would be a worse default than one that passes nothing.
 
-One more wrinkle, which explains a confusing observation later. The GIC is only required to implement
-the top bits of each priority byte - at least 4 of the 8, the rest implementation-defined. So writing
-`0xFF` and reading back `0xF8` or `0xF0` is normal, not a failed write. Read yours back once and note
-what it does; that tells you how many priority levels you actually have.
+One more wrinkle. The GIC is only required to implement the top bits of each priority byte - at least
+4 of the 8, the rest implementation-defined. So on some hardware, writing `0xFF` and reading back
+`0xF8` or `0xF0` is normal rather than a failed write.
+
+**QEMU implements all eight.** `GICC_PMR` here reads back exactly `0xFF`, verified. Worth knowing
+because it means a short read-back is a real bug on this machine, not the usual implementation-defined
+truncation - and it is one more place QEMU is more forgiving than silicon.
 
 `GICD_IPRIORITYR` resets to 0 for every interrupt, which is the *most* urgent, so it passes any
 non-zero mask. You can leave priorities alone for this task. Set them anyway once you have two
@@ -306,6 +330,11 @@ IRQ bit. `daifset` is the same instruction the other way. There is no ordinary w
 architecture gives them their own instruction because setting and clearing one bit atomically is the
 common case.
 
+`irq::unmask()` currently uses `#3`, which is F and I together - the same choice Linux makes on arm64.
+Nothing on this machine signals as FIQ, and the FIQ vector slot still leads to `unexpected_entry`,
+which parks the kernel. So `#2` would be the tighter choice here: it leaves masked a line whose only
+possible outcome is death.
+
 Two consequences worth having in your head now:
 
 **On taking an exception, the hardware sets all four automatically.** Your handler runs with
@@ -331,7 +360,7 @@ Everything above, in the order it happens. Byte arrives at the UART:
    If yes, it raises the IRQ line into the core.
 4. **The core** checks `PSTATE.I`. If clear, it takes the exception: saves the return address into
    `ELR_EL1`, saves `PSTATE` into `SPSR_EL1`, sets D, A, I and F, and jumps to
-   `VBAR_EL1 + 0x280` - the IRQ slot of the "current EL, SP_EL1" group, line 78 of `vectors.s`.
+   `VBAR_EL1 + 0x280` - the IRQ slot of the "current EL, SP_EL1" group, which points at `irq_entry`.
 5. **Your handler** reads `GICC_IAR`. It gets 33, and the interrupt moves from pending to **active**.
 6. **Your handler does the work** - for the UART, reads bytes out of `DR` until the FIFO is empty.
    This is what makes the device drop its line. Skipping it is the classic interrupt storm.
@@ -353,60 +382,61 @@ goes dead" - which reads like a hang, not a bug in the last line of a handler.
 
 ---
 
-## 11. What your existing code cannot do yet
+## 11. How the code holds the rules
 
-Three concrete gaps.
+Four places where the hardware's rules were turned into things the compiler enforces, rather than
+things you have to remember. Each one exists because the failure it prevents is silent.
 
-**`src/mem.rs` only does bytes.**
+**`Interrupt` owns the raw `IAR` word.** `gic::acknowledge` returns a value, not a number.
+`intid()` gives you the masked ID for comparing and printing; `end()` writes back the *raw* word,
+because for SGIs the bits above the ID name the sending core and `EOIR` wants them. Mask on the way
+out, never on the way in.
 
-```rust
-pub fn read_byte(address: u64) -> u8
-pub fn write_byte(address: u64, byte: u8) -> ()
-```
+**`end(self)` consumes.** EOI-ing the same interrupt twice does not compile.
 
-Every GIC register is 32 bits. `uart.rs` solved this privately with `read_register` /
-`write_register` at lines 146-154, which are `u32` and take an offset from a stored base. You need
-the same shape for the GIC, and you have two bases rather than one.
+**Spurious is `None`, not an error.** `acknowledge` returns `Option<Interrupt>`. Nothing failed when
+the GIC says 1023 - another core got there first, or the interrupt withdrew. There is simply nothing
+to do, and the rule "never EOI a spurious interrupt" needs no discipline because there is no
+`Interrupt` to call `end()` on.
 
-Since the MMU is off, all memory is Device memory, so these writes reach the GIC in program order
-without explicit barriers. That stops being true after MMU ON, which is where `dsb` starts appearing
-in other people's GIC code and looking mysterious.
+**The EOI is unconditional.** `handle_interrupt` has exactly one path from `acknowledge` to the end
+of the function, and `end()` is on it. An interrupt with no registered handler still gets
+acknowledged. This one was learned the hard way - see section 14.
 
-**The IRQ vector slot leads to a function that never returns.** `handle_exception` is `-> !` and ends
-in `loop { wfi }`. An IRQ needs a second path: save registers, call something that returns, restore
-registers, `eret`. `unexpected_entry` is only half of it - the restore side does not exist yet,
-because until now nothing ever needed to go back.
+`#[must_use]` on `Interrupt` covers less than it looks like: it catches a dropped expression, not a
+binding you early-return past. That is why the structure matters more than the attribute.
 
-`eret` is the instruction that undoes an exception. It restores `PSTATE` from `SPSR_EL1` and jumps to
-`ELR_EL1`, in one step. Ordinary `ret` will not do; it does not restore the processor state.
-
-**One naming thing.** `src/gic.rs` currently has `GICD_CTRL`. The spec spells it `GICD_CTLR` -
-ConTroL Register. Worth fixing now while there is one of them, because every table you look up will
-use the spec spelling and mismatched names are miserable to grep.
+**On memory ordering.** The MMU is off, so all memory is Device memory and these writes reach the GIC
+in program order without explicit barriers. That stops being true after MMU ON, which is where `dsb`
+starts appearing in other people's GIC code and looking mysterious.
 
 ---
 
-## 12. Bring-up order
+## 12. Bring-up order, as built
 
-Smallest thing that can be tested, first. Do not wire the UART yet - a device that can only be
-verified through a path you have not proven is the wrong first step.
+Smallest thing that can be tested, first. The UART was deliberately left until last - a device that
+can only be verified through a path you have not proven is the wrong first step.
 
 1. **Read `GICD_TYPER`.** Bits [4:0] tell you how many interrupts this GIC supports. A plausible
-   number proves you have the right base address and 32-bit access works. A read of all-ones or
-   all-zeros means you are talking to nothing.
+   number proves you have the right base address and 32-bit access works. All-ones or all-zeros means
+   you are talking to nothing. This machine reads `0x08`, so N=8 and 32×9 = **288 interrupt lines**.
 2. **Set `GICD_CTLR` bit 0.** Distributor on.
-3. **Write `0xFF` to `GICC_PMR`.** Mask wide open. Read it back - `0xF8` is correct.
+3. **Write `0xFF` to `GICC_PMR`.** Mask wide open. Reads back `0xFF` here.
 4. **Set `GICC_CTLR` bit 0.** CPU interface on.
-5. **Point the IRQ slot at a handler that returns.** Give it its own entry in `vectors.s`, separate
-   from `unexpected_entry`, that saves, calls, restores, and `eret`s.
-6. **Have that handler read `IAR`, print the INTID, write `EOIR`.** Nothing more. One line of output
-   is the entire goal.
-7. **Clear `PSTATE.I`** with `msr daifclr, #2`, after everything above. Last, deliberately: unmask
-   before the handler is ready and the first interrupt takes you somewhere unfinished.
+5. **Point the IRQ slot at a handler that returns.** Its own entry in `vectors.s`, separate from
+   `unexpected_entry`, that saves, calls, restores, and `eret`s.
+6. **Have that handler read `IAR`, dispatch, write `EOIR`.**
+7. **Clear `PSTATE.I`.** Last, deliberately: unmask before the handler is ready and the first
+   interrupt takes you somewhere unfinished.
 8. **Fire an SGI at yourself** and see the line print.
 
-Only then enable INTID 33, set its target and trigger type, and let the UART speak. At that point
-gate 1 is one bit in `IMSC` and you are into UART IRQ territory.
+Steps 1-4 are `gic::init`. Steps 6-7 are `irq.rs`. Step 8 is section 13.
+
+The order matters in one non-obvious place: `irq::register` fills the handler slot **before** calling
+`gic::enable`, so an interrupt cannot arrive and find an empty slot.
+
+Next is enabling INTID 33 with a real handler and letting the UART speak. Gate 1 is one bit in
+`IMSC`, and that is UART IRQ territory.
 
 ---
 
@@ -429,14 +459,39 @@ GICv2 their `ISENABLER` bits read as one and cannot be cleared, so there is noth
 They do still respect priority, `GICD_CTLR`, `GICC_CTLR` and `PMR` - which is exactly why an SGI is a
 good test of those four and nothing else.
 
-**The observable:** `make run`, and a line appears in the serial output that nothing typed and no
-device caused.
+**The observable:** a line appears in the serial output that nothing typed and no device caused.
 
-Two supporting checks that need no code changes:
+zhemon has no 32-bit store, and QEMU rejects byte writes to `GICD_SGIR` outright - `gic_dist_writeb`
+has an explicit `0xf00 is only handled for 32-bit writes` bail-out. So the SGI is fired by assembling
+five instructions, storing them in free RAM, and running them:
+
+```
+movz x0, #0xf00            ; movk x0, #0x800, lsl #16   -> x0 = GICD_SGIR
+movz w1, #0x0200, lsl #16  ; [movk w1, #n]              -> self-targeted SGI n
+str  w1, [x0]
+ret
+```
+
+Typed into the monitor, SGI 0 and SGI 1:
+
+```
+40010000: 00 E0 81 D2 00 00 A1 F2 01 40 A0 52 01 00 00 B9 C0 03 5F D6
+40010100: 00 E0 81 D2 00 00 A1 F2 01 40 A0 52 21 00 80 72 01 00 00 B9 C0 03 5F D6
+40010000 R
+40010100 R
+```
+
+`0x4001_0000` is free, four-aligned RAM past the end of the kernel, and zhemon's `R` requires
+four-alignment and returns via `ret`. SGI 0 has a handler; SGI 1 deliberately does not, which is what
+catches the missing-EOI bug in section 14. Fire 0, then 1, then 0 again - the third one printing is
+the real test.
+
+Supporting checks that need no code changes:
 
 ```sh
-make mem ADDR=0x08000000 N=1 FMT=xw    # GICD_CTLR - should read 1 once you enable it
-make mem ADDR=0x08010004 N=1 FMT=xw    # GICC_PMR  - should read 0xF8 after writing 0xFF
+make mem ADDR=0x08000000 N=2 FMT=xw    # GICD_CTLR = 1, GICD_TYPER = 8
+make mem ADDR=0x08010000 N=2 FMT=xw    # GICC_CTLR = 1, GICC_PMR = 0xFF
+make mem ADDR=0x08000100 N=1 FMT=xw    # GICD_ISENABLER0 = 0xFFFF - the SGIs, always on
 ```
 
 `make mem` boots the kernel, waits a second, then dumps physical memory from the monitor, so it reads
@@ -455,15 +510,17 @@ Because every failure looks identical, a checklist beats debugging.
 | Symptom | Where to look |
 |---|---|
 | Absolute silence | Some gate is shut. Walk 1-5 in section 3 in order; do not guess. |
-| `PMR` reads 0 | You never wrote it, or wrote to the distributor base by mistake. Reset value blocks everything. |
-| SGI works, UART does not | `ITARGETSR[33]` is 0. SGIs do not use it, so this failure only shows up on your first SPI. |
+| `PMR` reads 0 | You never wrote it, or wrote to the distributor base by mistake. Reset value blocks everything. Happened here: the CPU interface base was set to `GICD + 0x100`, so `PMR = 0xFF` landed in `GICD_ISENABLER1` and the real `PMR` was never touched. The offset between the two halves is 64 KiB, not 256 bytes. |
+| Everything reads back 0, no fault | Wrong base, but a *mapped* wrong base. An unmapped one gives you a data abort with the address in `FAR_EL1`, which is far more helpful. Distrust plausible zeros. |
 | Handler runs once, then dead | Missing `EOIR` write. |
+| Handler runs for known interrupts, dies after one unknown one | The no-handler path returned without EOI. The interrupt stays **active** forever, and since nothing programs `IPRIORITYR` every interrupt is priority 0, so the running priority never drops and *nothing* is delivered again. Confirmed live: SGI 0 printed, unhandled SGI 1 printed a warning, and every SGI after that was silence. |
 | Handler runs forever | Level-sensitive interrupt whose device was never silenced. For the UART that means you did not drain the FIFO. |
 | `IAR` returns 1023 | Spurious. Return without writing `EOIR`. If it is *always* 1023, the distributor forwarded nothing - gate 2 or 3. |
 | The fault report prints, `kind: unexpected slot` | The IRQ arrived but the slot still points at `unexpected_entry`. Actually good news: the whole chain works. |
 | The report prints and it was the **FIQ** slot | Group/security configuration. On this machine, with `virt` built without security extensions, everything is Group 0 and signals as IRQ - so this should not happen, and if it does, `GICC_CTLR` has more bits set than you meant. |
 | `PC=0x200` and a hang | Nothing to do with the GIC. A fault before `install_vectors`, per CLAUDE.md. |
-| Garbage after the first interrupt | The restore side of the IRQ entry is wrong, or the stack is unbalanced. `save_all_registers` moves `sp` by 256; the return path must move it back by exactly that. |
+| The line prints, then the machine hangs | The IRQ entry ends in `b park` or falls through instead of `eret`. The handler worked; the return did not. |
+| Garbage after the first interrupt | The restore side of the IRQ entry is wrong, or the stack is unbalanced. `save_all_registers` moves `sp` by 256; the return path must move it back by exactly that, and each register must be restored with the same width it was saved - `str x30` pairs with `ldr x30`, not `ldp`. |
 
 ---
 
@@ -488,13 +545,14 @@ not read as a gap in your setup:
 
 ---
 
-## 16. Done when
+## 16. Done
 
-An interrupt you caused with a register write reaches a handler installed by `install_vectors`,
-prints its INTID, and returns cleanly to the code it interrupted - which keeps running.
+An interrupt caused by a register write reaches a handler installed by `install_vectors`, prints its
+INTID, and returns cleanly to the code it interrupted - which keeps running. The monitor prompt still
+echoes afterwards, which is the half that proves the `eret`.
 
-That is `zheos-jpf`'s acceptance criterion, and it unblocks both UART IRQ and TIMER, because from
-that point on adding a device is two bits: one in the device, one in `ISENABLER`.
+That was `zheos-jpf`'s acceptance criterion. It unblocks UART IRQ and TIMER, because from here adding
+a device is two bits: one in the device, one in `ISENABLER` - and a call to `irq::register`.
 
 ---
 

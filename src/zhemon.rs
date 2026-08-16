@@ -1,6 +1,5 @@
 use crate::{console, mem, print, println, uart};
 use console::{Line, read_line, write_new_line};
-use core::fmt::Write;
 use parser::{LineParseError, ParsedCommand, Parser};
 
 mod cursor;

@@ -41,6 +41,7 @@ mod exception;
 mod gic;
 mod irq;
 mod mem;
+mod ring_buffer;
 mod std;
 mod uart;
 mod zhemon;

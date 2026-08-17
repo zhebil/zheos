@@ -6,6 +6,7 @@ use core::{
 
 use crate::board::UART_BASE;
 use crate::cpu;
+use crate::ring_buffer::RingBuffer;
 
 mod reg {
     pub const DR: usize = 0x00; // Data Register
@@ -245,46 +246,7 @@ pub fn uart() -> &'static UARTDriver {
     &UART
 }
 
-const RING_BUFFER_SIZE: usize = 256;
-
-struct InputRingBuffer {
-    buffer: [Received; RING_BUFFER_SIZE],
-    head: usize,
-    tail: usize,
-    full: bool,
-}
-
-impl InputRingBuffer {
-    const fn new() -> Self {
-        Self {
-            buffer: [Received::EMPTY; RING_BUFFER_SIZE],
-            head: 0,
-            tail: 0,
-            full: false,
-        }
-    }
-
-    fn push(&mut self, received: Received) {
-        if self.full {
-            return;
-        }
-        self.buffer[self.tail] = received;
-        self.tail = (self.tail + 1) % RING_BUFFER_SIZE;
-        self.full = self.tail == self.head;
-    }
-
-    fn pop(&mut self) -> Option<Received> {
-        if !self.full && self.tail == self.head {
-            return None;
-        }
-        let received = self.buffer[self.head];
-        self.head = (self.head + 1) % RING_BUFFER_SIZE;
-        self.full = false;
-        Some(received)
-    }
-}
-
-struct InputBuffer(UnsafeCell<InputRingBuffer>);
+struct InputBuffer(UnsafeCell<RingBuffer<Received>>);
 
 // SAFETY: both methods below run inside cpu::without_interrupts, and on one core
 // an interrupt is the only thing that can cut in, so a push and a pop can never
@@ -295,7 +257,7 @@ unsafe impl Sync for InputBuffer {}
 
 impl InputBuffer {
     const fn new() -> Self {
-        Self(UnsafeCell::new(InputRingBuffer::new()))
+        Self(UnsafeCell::new(RingBuffer::new(Received::EMPTY)))
     }
 
     fn push(&self, received: Received) {

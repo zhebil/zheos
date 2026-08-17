@@ -1,3 +1,5 @@
+// Must stay a power of two, or every `%` below becomes a udiv in the interrupt
+// handler instead of a single AND.
 const RING_BUFFER_SIZE: usize = 256;
 
 pub struct RingBuffer<T: Copy> {
@@ -21,7 +23,10 @@ impl<T: Copy> RingBuffer<T> {
         if self.full {
             return;
         }
-        self.buffer[self.tail] = value;
+        // The mask is redundant - tail is always in range - but it is what lets
+        // LLVM drop the bounds check, and it folds into the addressing mode for
+        // free. Removing it costs four instructions and a panic call site.
+        self.buffer[self.tail % RING_BUFFER_SIZE] = value;
         self.tail = (self.tail + 1) % RING_BUFFER_SIZE;
         self.full = self.tail == self.head;
     }
@@ -30,7 +35,7 @@ impl<T: Copy> RingBuffer<T> {
         if !self.full && self.tail == self.head {
             return None;
         }
-        let value = self.buffer[self.head];
+        let value = self.buffer[self.head % RING_BUFFER_SIZE];
         self.head = (self.head + 1) % RING_BUFFER_SIZE;
         self.full = false;
         Some(value)

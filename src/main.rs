@@ -8,7 +8,10 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use crate::uart::{UART_INTID, uart};
+use crate::{
+    board::{PSCI_SYSTEM_OFF, UART_INTID},
+    uart::uart,
+};
 
 global_asm!(include_str!("kernel.s"));
 
@@ -71,7 +74,7 @@ pub extern "C" fn kmain() -> ! {
 
 pub fn shutdown() -> ! {
     unsafe {
-        asm!("hvc #0", in("x0") 0x84000008u64, options(noreturn));
+        asm!("hvc #0", in("x0") PSCI_SYSTEM_OFF, options(noreturn));
     }
 }
 

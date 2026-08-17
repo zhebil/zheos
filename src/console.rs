@@ -1,4 +1,4 @@
-use crate::uart::uart;
+use crate::{input, uart::uart};
 
 pub struct ReadlineResult<'a> {
     pub buf: &'a [u8],
@@ -62,9 +62,9 @@ pub fn read_line<'a>(buf: &'a mut [u8]) -> Line<'a> {
     let mut device_error = false;
 
     loop {
-        let c = uart().getc();
+        let c = input::getc();
 
-        if c.flags.framing() || c.flags.parity() || c.flags.overrun() || c.flags.brk() {
+        if c.error {
             device_error = true;
         }
 

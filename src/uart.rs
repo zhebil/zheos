@@ -1,12 +1,9 @@
-use core::{
-    arch::asm,
-    cell::UnsafeCell,
-    fmt::{Display, Write},
-};
+use core::fmt::{Display, Write};
 
-use crate::board::UART_BASE;
-use crate::cpu;
-use crate::ring_buffer::RingBuffer;
+use crate::{
+    board::UART_BASE,
+    input::{self, InputByte},
+};
 
 mod reg {
     pub const DR: usize = 0x00; // Data Register
@@ -46,6 +43,24 @@ mod imsc {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct UARTByte {
+    pub byte: u8,
+    pub flags: RxFlags,
+}
+
+impl UARTByte {
+    fn into_input_byte(self) -> InputByte {
+        InputByte {
+            byte: self.byte,
+            error: self.flags.framing()
+                || self.flags.parity()
+                || self.flags.brk()
+                || self.flags.overrun(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct RxFlags(u32);
 
 impl RxFlags {
@@ -77,19 +92,6 @@ impl RxFlags {
     pub const fn from_data(data: u32) -> Self {
         Self::new(data >> Self::DATA_BYTE_OFFSET)
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Received {
-    pub byte: u8,
-    pub flags: RxFlags,
-}
-
-impl Received {
-    const EMPTY: Self = Self {
-        byte: 0,
-        flags: RxFlags::new(0),
-    };
 }
 
 pub struct UARTDriver {
@@ -140,33 +142,24 @@ impl UARTDriver {
         self.write_data(c)
     }
 
-    pub fn try_getc(&self) -> Option<Received> {
+    pub fn flush(&self) {
+        while self.read_register(reg::FR) & fr::BUSY != 0 {}
+    }
+
+    fn try_getc(&self) -> Option<UARTByte> {
         if self.has_byte() {
             let c = self.read_data();
             let flags = RxFlags::from_data(c);
             let byte = Self::data_byte_mask(c);
 
-            Some(Received { byte, flags })
+            Some(UARTByte { byte, flags })
         } else {
             None
         }
     }
 
-    pub fn getc(&self) -> Received {
-        loop {
-            if let Some(received) = INPUT_BUFFER.pop() {
-                return received;
-            }
-            unsafe { asm!("wfi") }
-        }
-    }
-
-    pub fn clear_interrupts(&self) {
+    fn clear_interrupts(&self) {
         self.write_register(reg::ICR, icr::ALL_MASK);
-    }
-
-    pub fn flush(&self) {
-        while self.read_register(reg::FR) & fr::BUSY != 0 {}
     }
 
     fn read_register(&self, offset: usize) -> u32 {
@@ -246,39 +239,12 @@ pub fn uart() -> &'static UARTDriver {
     &UART
 }
 
-struct InputBuffer(UnsafeCell<RingBuffer<Received>>);
-
-// SAFETY: both methods below run inside cpu::without_interrupts, and on one core
-// an interrupt is the only thing that can cut in, so a push and a pop can never
-// overlap. The masking is load-bearing here - unlike HandlerTable, whose two
-// sides simply never run in the same phase, push and pop both write head, tail
-// and full, and both are live at the same time.
-unsafe impl Sync for InputBuffer {}
-
-impl InputBuffer {
-    const fn new() -> Self {
-        Self(UnsafeCell::new(RingBuffer::new(Received::EMPTY)))
-    }
-
-    fn push(&self, received: Received) {
-        cpu::without_interrupts(|| unsafe { (*self.0.get()).push(received) })
-    }
-
-    fn pop(&self) -> Option<Received> {
-        cpu::without_interrupts(|| unsafe { (*self.0.get()).pop() })
-    }
-}
-
-static INPUT_BUFFER: InputBuffer = InputBuffer::new();
-
 pub fn handle_interrupt(_intid: u32) {
     let uart = uart();
     uart.clear_interrupts();
 
-    // Drop on overflow: blocking here would mask interrupts forever, and the
-    // only thing that could drain the buffer is code that cannot run until we
-    // return.
-    while let Some(received) = uart.try_getc() {
-        INPUT_BUFFER.push(received);
+    // Drop on overflow
+    while let Some(uart_byte) = uart.try_getc() {
+        input::push_character(uart_byte.into_input_byte());
     }
 }

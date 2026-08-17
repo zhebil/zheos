@@ -39,6 +39,7 @@ mod console;
 mod cpu;
 mod exception;
 mod gic;
+mod input;
 mod irq;
 mod mem;
 mod ring_buffer;

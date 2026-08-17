@@ -5,7 +5,7 @@ use core::{
 };
 
 use crate::board::UART_BASE;
-use crate::irq;
+use crate::cpu;
 
 mod reg {
     pub const DR: usize = 0x00; // Data Register
@@ -286,7 +286,7 @@ impl InputRingBuffer {
 
 struct InputBuffer(UnsafeCell<InputRingBuffer>);
 
-// SAFETY: both methods below run inside irq::without_interrupts, and on one core
+// SAFETY: both methods below run inside cpu::without_interrupts, and on one core
 // an interrupt is the only thing that can cut in, so a push and a pop can never
 // overlap. The masking is load-bearing here - unlike HandlerTable, whose two
 // sides simply never run in the same phase, push and pop both write head, tail
@@ -299,11 +299,11 @@ impl InputBuffer {
     }
 
     fn push(&self, received: Received) {
-        irq::without_interrupts(|| unsafe { (*self.0.get()).push(received) })
+        cpu::without_interrupts(|| unsafe { (*self.0.get()).push(received) })
     }
 
     fn pop(&self) -> Option<Received> {
-        irq::without_interrupts(|| unsafe { (*self.0.get()).pop() })
+        cpu::without_interrupts(|| unsafe { (*self.0.get()).pop() })
     }
 }
 

@@ -27,12 +27,13 @@ fn panic_handler(info: &PanicInfo) -> ! {
     }
 
     loop {
-        unsafe { asm!("wfi") } // wait for interrupts
+        cpu::wait_for_interrupt();
     }
 }
 
 mod board;
 mod console;
+mod cpu;
 mod exception;
 mod gic;
 mod irq;

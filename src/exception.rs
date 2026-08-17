@@ -1,4 +1,4 @@
-use crate::{print, println, uart::uart};
+use crate::{cpu, print, println, uart::uart};
 use core::{
     arch::{asm, global_asm},
     sync::atomic::{AtomicBool, Ordering},
@@ -131,6 +131,6 @@ pub extern "C" fn handle_exception(
     }
 
     loop {
-        unsafe { asm!("wfi") } // wait for interrupts
+        cpu::wait_for_interrupt();
     }
 }

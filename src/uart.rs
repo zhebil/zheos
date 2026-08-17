@@ -309,8 +309,6 @@ impl InputBuffer {
 
 static INPUT_BUFFER: InputBuffer = InputBuffer::new();
 
-pub const UART_INTID: u32 = 33;
-
 pub fn handle_interrupt(_intid: u32) {
     let uart = uart();
     uart.clear_interrupts();

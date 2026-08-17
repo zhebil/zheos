@@ -1,36 +1,10 @@
-use crate::gic;
 use crate::uart::uart;
-use core::arch::asm;
+use crate::{cpu, gic};
 use core::cell::UnsafeCell;
 use core::fmt::Write;
 
 pub fn unmask() {
-    unsafe {
-        asm!("msr daifclr, #3", options(preserves_flags, nostack));
-    }
-}
-
-/// Runs `f` with IRQs masked, then puts DAIF back exactly as it was.
-///
-/// Restoring rather than unmasking is what makes this safe to call from a
-/// handler, where exception entry has already masked everything.
-pub fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
-    let daif: u64;
-    // No nomem: these must act as compiler barriers, or the optimiser is free to
-    // hoist a read of the data they protect out of the surrounding loop and spin
-    // forever on a stale value.
-    unsafe {
-        asm!("mrs {}, daif", out(reg) daif, options(nostack, preserves_flags));
-        asm!("msr daifset, #2", options(nostack, preserves_flags));
-    }
-
-    let result = f();
-
-    unsafe {
-        asm!("msr daif, {}", in(reg) daif, options(nostack, preserves_flags));
-    }
-
-    result
+    cpu::unmask_irqs();
 }
 
 const IRQ_COUNT: u32 = 64;

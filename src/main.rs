@@ -45,10 +45,6 @@ mod std;
 mod uart;
 mod zhemon;
 
-pub fn irq0_handler(intid: u32) {
-    let _ = writeln!(uart(), "Received interrupt {}", intid);
-}
-
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
     uart().init();
@@ -56,7 +52,6 @@ pub extern "C" fn kmain() -> ! {
     exception::install_vectors();
 
     gic::init();
-    irq::register(0, irq0_handler);
 
     irq::register(UART_INTID, uart::handle_interrupt);
     uart().enable_interrupt();

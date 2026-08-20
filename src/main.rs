@@ -6,6 +6,7 @@ use core::{
     fmt::Write,
     panic::PanicInfo,
     sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
 };
 
 use crate::{
@@ -44,8 +45,11 @@ mod irq;
 mod mem;
 mod ring_buffer;
 mod std;
+mod timer;
 mod uart;
 mod zhemon;
+
+const TIMER_HZ: u32 = 100;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
@@ -58,12 +62,15 @@ pub extern "C" fn kmain() -> ! {
     irq::register(UART_INTID, uart::handle_interrupt);
     uart().enable_interrupt();
 
+    timer::init(TIMER_HZ);
+
     irq::unmask();
 
     let _ = writeln!(uart(), "Hello, ZheOS!");
     let _ = writeln!(uart(), "Type 'exit' to shutdown the system");
     let _ = writeln!(uart(), "----------------------------------");
 
+    timer::sleep(Duration::from_secs(1));
     zhemon::Zhemon::new().start();
 
     shutdown()

@@ -48,3 +48,49 @@ fn restore_daif(daif: u64) {
         asm!("msr daif, {}", in(reg) daif, options(nostack, preserves_flags));
     }
 }
+
+pub mod timer {
+    use core::arch::asm;
+
+    pub fn read_freq() -> u32 {
+        let mut freq: u64 = 0;
+        unsafe { asm!("mrs {}, CNTFRQ_EL0", out(reg) freq) };
+        freq as u32
+    }
+
+    pub fn read_count() -> u64 {
+        let mut count: u64 = 0;
+        unsafe { asm!("isb; mrs {}, CNTPCT_EL0", out(reg) count) };
+        count
+    }
+
+    pub fn read_compare() -> u64 {
+        let mut compare: u64 = 0;
+        unsafe { asm!("mrs {}, CNTP_CVAL_EL0", out(reg) compare) };
+        compare
+    }
+
+    pub fn write_compare(compare: u64) {
+        unsafe { asm!("msr CNTP_CVAL_EL0, {}", in(reg) compare) };
+    }
+
+    pub fn read_timer_value() -> u64 {
+        let mut timer_value: u64 = 0;
+        unsafe { asm!("mrs {}, CNTP_TVAL_EL0", out(reg) timer_value) };
+        timer_value
+    }
+
+    pub fn write_timer_value(timer_value: u64) {
+        unsafe { asm!("msr CNTP_TVAL_EL0, {}", in(reg) timer_value) };
+    }
+
+    pub fn read_control() -> u64 {
+        let mut control: u64 = 0;
+        unsafe { asm!("mrs {}, CNTP_CTL_EL0", out(reg) control) };
+        control
+    }
+
+    pub fn write_control(control: u64) {
+        unsafe { asm!("msr CNTP_CTL_EL0, {}", in(reg) control) };
+    }
+}

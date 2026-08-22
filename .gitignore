@@ -16,3 +16,6 @@ virt.dtb
 .dolt/
 *.db
 .beads-credential-key
+
+# tldsl canvas-state sidecars, regenerated on render
+*.tldsl.overlay.json

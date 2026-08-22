@@ -66,14 +66,13 @@ pub extern "C" fn kmain() -> ! {
     println!("Type 'exit' to shutdown the system");
     println!("----------------------------------");
 
-    let dtb = unsafe { dtb::Dtb::from_ptr(DTB_BASE) };
-    dtb.print_header();
+    let memory = unsafe { dtb::Dtb::from_ptr(DTB_BASE) }.and_then(|dtb| dtb.memory());
 
-    for (addr, size) in dtb.reservations() {
-        println!("{:#010x} {:x} bytes", addr, size);
+    if let Some(memory) = memory {
+        println!("{:#010x} {:x} bytes", memory.addr, memory.size);
+    } else {
+        println!("Memory not found");
     }
-
-    dtb.walk_struct();
 
     zhemon::Zhemon::new().start();
 

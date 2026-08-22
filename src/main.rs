@@ -34,6 +34,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
     }
 }
 
+mod bit;
 mod board;
 mod console;
 mod cpu;
@@ -73,8 +74,4 @@ pub fn shutdown() -> ! {
     unsafe {
         asm!("hvc #0", in("x0") PSCI_SYSTEM_OFF, options(noreturn));
     }
-}
-
-const fn bit_mask(bit: u32) -> u32 {
-    1 << bit
 }

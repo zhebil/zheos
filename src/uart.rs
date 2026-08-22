@@ -18,13 +18,17 @@ mod reg {
 }
 
 mod fr {
-    pub const BUSY: u32 = crate::bit_mask(3); // The wire is not quiet yet.
-    pub const TXFF: u32 = crate::bit_mask(5); // Transmit FIFO is Full
-    pub const RXFE: u32 = crate::bit_mask(4); // Receive FIFO is Empty
+    use crate::bit::bit_mask;
+
+    pub const BUSY: u32 = bit_mask(3); // The wire is not quiet yet.
+    pub const TXFF: u32 = bit_mask(5); // Transmit FIFO is Full
+    pub const RXFE: u32 = bit_mask(4); // Receive FIFO is Empty
 }
 
 mod lcr_h {
-    pub const FEN: u32 = crate::bit_mask(4); // FIFO Enable
+    use crate::bit::bit_mask;
+
+    pub const FEN: u32 = bit_mask(4); // FIFO Enable
     pub const WLEN_8BIT: u32 = 0b11 << 5; // Word Length 8-bit
 }
 
@@ -38,8 +42,10 @@ mod icr {
 }
 
 mod imsc {
-    pub const RX: u32 = crate::bit_mask(4);
-    pub const RT: u32 = crate::bit_mask(6);
+    use crate::bit::bit_mask;
+
+    pub const RX: u32 = bit_mask(4);
+    pub const RT: u32 = bit_mask(6);
 }
 
 #[derive(Debug, Clone, Copy)]

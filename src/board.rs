@@ -7,3 +7,5 @@ pub const UART_INTID: u32 = 33;
 
 // PSCI (Power State Coordination Interface) function ID for SYSTEM_OFF.
 pub const PSCI_SYSTEM_OFF: usize = 0x8400_0008;
+
+pub const DTB_BASE: usize = 0x4700_0000;

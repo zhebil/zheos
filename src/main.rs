@@ -10,7 +10,7 @@ use core::{
 };
 
 use crate::{
-    board::{PSCI_SYSTEM_OFF, UART_INTID},
+    board::{DTB_BASE, PSCI_SYSTEM_OFF, UART_INTID},
     uart::uart,
 };
 
@@ -39,6 +39,7 @@ mod bit;
 mod board;
 mod console;
 mod cpu;
+mod dtb;
 mod exception;
 mod gic;
 mod input;
@@ -70,6 +71,15 @@ pub extern "C" fn kmain() -> ! {
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");
     println!("----------------------------------");
+
+    let dtb = unsafe { dtb::Dtb::from_ptr(DTB_BASE) };
+    dtb.print_header();
+
+    for (addr, size) in dtb.reservations() {
+        println!("{:#010x} {:x} bytes", addr, size);
+    }
+
+    dtb.walk_struct();
 
     timer::sleep(Duration::from_secs(1));
     zhemon::Zhemon::new().start();

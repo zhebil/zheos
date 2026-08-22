@@ -9,3 +9,5 @@ pub const UART_INTID: u32 = 33;
 pub const PSCI_SYSTEM_OFF: usize = 0x8400_0008;
 
 pub const TIMER_INTID: u32 = 30;
+
+pub const DTB_BASE: usize = 0x4700_0000;

@@ -61,9 +61,9 @@ pub extern "C" fn kmain() -> ! {
 
     irq::unmask();
 
-    let _ = writeln!(uart(), "Hello, ZheOS!");
-    let _ = writeln!(uart(), "Type 'exit' to shutdown the system");
-    let _ = writeln!(uart(), "----------------------------------");
+    println!("Hello, ZheOS!");
+    println!("Type 'exit' to shutdown the system");
+    println!("----------------------------------");
 
     zhemon::Zhemon::new().start();
 

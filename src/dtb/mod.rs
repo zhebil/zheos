@@ -1,7 +1,6 @@
+use cursor::Cursor;
 use header::Header;
 use structure::{Nodes, read_cells};
-
-use crate::dtb::cursor::Cursor;
 
 mod cursor;
 mod header;
@@ -45,7 +44,7 @@ impl<'a> Dtb<'a> {
     pub fn nodes(&self) -> Option<Nodes<'a>> {
         let start = self.header.off_dt_struct() as usize;
         let end = start + self.header.size_dt_struct() as usize;
-        let struct_blob = &self.blob.get(start..end)?;
+        let struct_blob = self.blob.get(start..end)?;
         Some(Nodes::new(struct_blob, self.strings))
     }
 

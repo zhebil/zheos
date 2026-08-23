@@ -95,11 +95,8 @@ impl<'a> Node<'a> {
     }
 
     pub fn is_memory(&self) -> bool {
-        let is_memory = self
-            .property(b"device_type")
-            .is_some_and(|property| property.value == b"memory\0".as_slice());
-
-        is_memory
+        self.property(b"device_type")
+            .is_some_and(|property| property.value == b"memory\0".as_slice())
     }
 
     pub fn cells(&self) -> (usize, usize) {
@@ -160,24 +157,22 @@ pub struct Property<'a> {
 
 impl<'a> Property<'a> {
     fn as_u32(&self) -> Option<u32> {
-        be_read_from_arr(self.value, 0)
+        Cursor::new(self.value, 0).read_u32()
     }
 }
 
 /// Reads `cells` big-endian u32s as one number. Two cells is the widest a u64 holds.
 pub fn read_cells(bytes: &[u8], cells: usize) -> Option<u64> {
-    if cells == 0 || cells > 2 {
+    if cells > 2 {
         return None;
     }
 
+    let mut cursor = Cursor::new(bytes, 0);
+
     let mut value = 0;
-    for cell in bytes.get(..cells * 4)?.chunks_exact(4) {
-        value = value << 32 | be_read_from_arr(cell, 0)? as u64;
+    for _ in 0..cells {
+        value = value << 32 | cursor.read_u32()? as u64;
     }
 
     Some(value)
-}
-
-pub fn be_read_from_arr(arr: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(*arr.get(offset..)?.first_chunk()?))
 }

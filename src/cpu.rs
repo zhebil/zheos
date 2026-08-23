@@ -49,7 +49,7 @@ fn restore_daif(daif: u64) {
     }
 }
 
-pub mod timer {
+pub mod generic_timer {
     use core::arch::asm;
 
     pub fn read_freq() -> u32 {

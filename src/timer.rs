@@ -5,7 +5,7 @@ use crate::{
     board::TIMER_INTID,
     cpu::{
         self,
-        timer::{
+        generic_timer::{
             read_compare, read_count, read_freq, write_compare, write_control, write_timer_value,
         },
     },

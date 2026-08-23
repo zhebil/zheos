@@ -34,7 +34,6 @@ fn panic_handler(info: &PanicInfo) -> ! {
     }
 }
 
-mod bit;
 mod board;
 mod console;
 mod cpu;

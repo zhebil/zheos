@@ -68,30 +68,6 @@ fn ticks_from(duration: Duration, rate: u64) -> u64 {
     whole + fraction
 }
 
-fn duration_from(ticks: u64, rate: u64) -> Duration {
-    let seconds = ticks / rate;
-    let remainder = ticks % rate;
-
-    Duration::new(seconds, (remainder * NANOSECONDS_PER_SECOND / rate) as u32)
-}
-
-/// Ticks of the free-running counter, `read_freq()` of them per second.
-struct CpuTicks(u64);
-
-impl CpuTicks {
-    fn since_boot() -> Self {
-        Self(read_count())
-    }
-
-    fn from_duration(duration: Duration) -> Self {
-        Self(ticks_from(duration, read_freq() as u64))
-    }
-
-    fn to_duration(self) -> Duration {
-        duration_from(self.0, read_freq() as u64)
-    }
-}
-
 /// Timer interrupts handled, `HZ` of them per second.
 struct HeartbeatTicks(u64);
 
@@ -110,23 +86,6 @@ impl HeartbeatTicks {
     fn from_duration(duration: Duration) -> Self {
         Self(ticks_from(duration, Self::rate()))
     }
-}
-
-/// Heartbeats since `init`. Rises on its own; nothing but the handler writes it.
-pub fn ticks() -> u64 {
-    KERNEL_TICKS.load(Ordering::Relaxed)
-}
-
-/// Time since the machine powered on. Reads the counter, so it needs no `init`.
-pub fn now() -> Duration {
-    CpuTicks::since_boot().to_duration()
-}
-
-/// Busy-waits. Needs no `init`, so it is the one usable during device bring-up.
-pub fn delay(duration: Duration) {
-    let deadline = read_count() + CpuTicks::from_duration(duration).0;
-
-    while read_count() < deadline {}
 }
 
 /// Parks the core until the heartbeat has advanced. Needs `init` and unmasked IRQs.

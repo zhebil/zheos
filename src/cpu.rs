@@ -74,20 +74,8 @@ pub mod generic_timer {
         unsafe { asm!("msr CNTP_CVAL_EL0, {}", in(reg) compare) };
     }
 
-    pub fn read_timer_value() -> u64 {
-        let mut timer_value: u64 = 0;
-        unsafe { asm!("mrs {}, CNTP_TVAL_EL0", out(reg) timer_value) };
-        timer_value
-    }
-
     pub fn write_timer_value(timer_value: u64) {
         unsafe { asm!("msr CNTP_TVAL_EL0, {}", in(reg) timer_value) };
-    }
-
-    pub fn read_control() -> u64 {
-        let mut control: u64 = 0;
-        unsafe { asm!("mrs {}, CNTP_CTL_EL0", out(reg) control) };
-        control
     }
 
     pub fn write_control(control: u64) {

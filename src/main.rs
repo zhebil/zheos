@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::{
-    arch::{asm, global_asm},
+    arch::global_asm,
     fmt::Write,
     num::NonZeroU32,
     panic::PanicInfo,
@@ -11,7 +11,7 @@ use core::{
 };
 
 use crate::{
-    board::{Board, DTB_BASE, PSCI_SYSTEM_OFF},
+    board::{Board, Conduit, DTB_BASE},
     uart::uart,
 };
 
@@ -46,6 +46,7 @@ mod input;
 mod irq;
 mod mmio;
 mod print;
+mod psci;
 mod ring_buffer;
 mod timer;
 mod uart;
@@ -93,7 +94,7 @@ pub extern "C" fn kmain() -> ! {
     timer::sleep(Duration::from_secs(1));
     zhemon::Zhemon::new().start();
 
-    shutdown()
+    shutdown(board.psci)
 }
 
 /// Stops, but stays readable: powering off would leave nothing to attach to,
@@ -106,8 +107,9 @@ fn halt() -> ! {
     }
 }
 
-pub fn shutdown() -> ! {
-    unsafe {
-        asm!("hvc #0", in("x0") PSCI_SYSTEM_OFF, options(noreturn));
-    }
+fn shutdown(conduit: Conduit) -> ! {
+    psci::system_off(conduit);
+
+    println!("PSCI refused to power the machine off");
+    halt()
 }

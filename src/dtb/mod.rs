@@ -1,4 +1,4 @@
-use core::fmt::Display;
+use crate::region::Region;
 
 use cursor::Cursor;
 use header::Header;
@@ -11,31 +11,6 @@ mod header;
 mod structure;
 
 const ROOT_CHILD_DEPTH: u32 = 1;
-
-/// One `(address, size)` pair out of a `reg` property.
-#[derive(Clone, Copy, Debug)]
-pub struct Region {
-    pub base: usize,
-    pub size: usize,
-}
-
-impl Region {
-    pub const EMPTY: Region = Region { base: 0, size: 0 };
-
-    pub fn end(&self) -> usize {
-        self.base + self.size
-    }
-
-    pub fn is_overlapping(&self, other: &Region) -> bool {
-        self.base < other.end() && other.base < self.end()
-    }
-}
-
-impl Display for Region {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:#012x}: {:x} bytes", self.base, self.size)
-    }
-}
 
 pub struct Dtb<'a> {
     blob: &'a [u8],

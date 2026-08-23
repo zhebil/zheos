@@ -1,4 +1,7 @@
-use crate::dtb::{Dtb, Node, Region};
+use crate::{
+    dtb::{Dtb, Node},
+    region::Region,
+};
 
 /// The one address that cannot come from the device tree, because it is what
 /// prints the message saying the device tree could not be read.

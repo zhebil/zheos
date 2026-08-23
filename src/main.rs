@@ -50,6 +50,7 @@ mod irq;
 mod mmio;
 mod print;
 mod psci;
+mod region;
 mod ring_buffer;
 mod timer;
 mod uart;
@@ -95,18 +96,10 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("dtb: {}", dtb.region());
     println!("memory: {}", board.memory);
 
-    let mut bump = Bump::new(board.memory); // memblock_add
-    match bump.reserve(bump::image()) {
-        Ok(_) => {}
-        Err(_) => {
-            println!("no space for kernel");
-            halt();
-        }
-    };
-    match bump.reserve(dtb.region()) {
-        Ok(_) => {}
-        Err(_) => {
-            println!("no space for dtb");
+    let mut bump = match Bump::discover(board.memory, &dtb) {
+        Ok(bump) => bump,
+        Err(unprotected) => {
+            println!("No room to reserve the {unprotected}");
             halt();
         }
     };

@@ -1,6 +1,6 @@
 use core::{alloc::Layout, ptr::NonNull};
 
-use crate::dtb::Region;
+use crate::{dtb::Dtb, region::Region};
 
 pub fn image() -> Region {
     unsafe extern "C" {
@@ -17,9 +17,10 @@ pub fn image() -> Region {
     }
 }
 
-pub enum ReserveError {
-    Full,
-}
+pub struct Full;
+
+const IMAGE: &str = "kernel image";
+const DEVICE_TREE: &str = "device tree";
 
 const RESERVED_LEN: usize = 8;
 
@@ -31,7 +32,16 @@ pub struct Bump {
 }
 
 impl Bump {
-    pub fn new(memory: Region) -> Self {
+    pub fn discover(memory: Region, dtb: &Dtb) -> Result<Bump, &'static str> {
+        let mut bump = Bump::new(memory);
+
+        bump.reserve(image()).map_err(|_| IMAGE)?;
+        bump.reserve(dtb.region()).map_err(|_| DEVICE_TREE)?;
+
+        Ok(bump)
+    }
+
+    fn new(memory: Region) -> Self {
         Self {
             next: memory.base,
             end: memory.base + memory.size,
@@ -40,16 +50,16 @@ impl Bump {
         }
     }
 
-    pub fn reserve(&mut self, region: Region) -> Result<(), ReserveError> {
+    pub fn reserve(&mut self, region: Region) -> Result<(), Full> {
         if self.reserved_len >= RESERVED_LEN {
-            return Err(ReserveError::Full);
+            return Err(Full);
         }
         self.reserved[self.reserved_len] = region;
         self.reserved_len += 1;
         Ok(())
     }
 
-    // Does not take into account reserved space
+    /// An upper bound: reservations ahead of the pointer are not subtracted.
     pub fn remaining(&self) -> usize {
         self.end - self.next
     }

@@ -2,6 +2,7 @@
 #![no_main]
 
 use core::{
+    alloc::Layout,
     arch::global_asm,
     fmt::Write,
     num::NonZeroU32,
@@ -12,6 +13,7 @@ use core::{
 
 use crate::{
     board::{Board, Conduit},
+    bump::Bump,
     uart::uart,
 };
 
@@ -92,6 +94,33 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("image: {}", image);
     println!("dtb: {}", dtb.region());
     println!("memory: {}", board.memory);
+
+    let mut bump = Bump::new(board.memory); // memblock_add
+    match bump.reserve(bump::image()) {
+        Ok(_) => {}
+        Err(_) => {
+            println!("no space for kernel");
+            halt();
+        }
+    };
+    match bump.reserve(dtb.region()) {
+        Ok(_) => {}
+        Err(_) => {
+            println!("no space for dtb");
+            halt();
+        }
+    };
+    let remain_mem = bump.remaining();
+    println!("remains memory: {}", remain_mem);
+
+    let l = Layout::new::<u64>();
+    match bump.alloc(l) {
+        Some(ptr) => println!("ptr: {:#012x}", ptr.addr()),
+        None => println!("no space for 8 bytes"),
+    };
+
+    let remain_mem = bump.remaining();
+    println!("remains memory: {}", remain_mem);
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");

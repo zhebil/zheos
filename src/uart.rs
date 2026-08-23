@@ -136,6 +136,7 @@ impl UARTDriver {
         self.write_register(reg::IMSC, imsc::RX | imsc::RT);
     }
 
+    #[inline(never)]
     pub fn putc(&self, c: u8) {
         // Wait until FIFO is not full
         while self.read_register(reg::FR) & fr::TXFF != 0 {}
@@ -200,6 +201,7 @@ impl UARTDriver {
 }
 
 impl Write for &UARTDriver {
+    #[inline(never)]
     fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
         for c in s.as_bytes() {
             if *c == b'\n' {

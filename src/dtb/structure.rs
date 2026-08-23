@@ -30,6 +30,7 @@ impl<'a> Nodes<'a> {
 impl<'a> Iterator for Nodes<'a> {
     type Item = Node<'a>;
 
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.cursor.done() {
@@ -87,6 +88,7 @@ impl<'a> Node<'a> {
         self.depth
     }
 
+    #[inline(never)]
     pub fn property(&self, name: &[u8]) -> Option<Property<'a>> {
         let mut properties = self.properties;
         properties.find(|property| property.name == name)

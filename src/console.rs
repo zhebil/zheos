@@ -15,7 +15,7 @@ enum InputChar {
     Char(u8),
     Backspace,
     Newline,
-    ESCAPE,
+    Escape,
     NonPrintable,
 }
 
@@ -30,7 +30,7 @@ impl InputChar {
         }
 
         if Self::is_escape(byte) {
-            return Self::ESCAPE;
+            return Self::Escape;
         }
 
         if Self::is_non_printable(byte) {
@@ -83,7 +83,7 @@ pub fn read_line<'a>(buf: &'a mut [u8]) -> Line<'a> {
                 }
                 continue;
             }
-            InputChar::ESCAPE => {
+            InputChar::Escape => {
                 write_new_line();
                 return Line::Abandoned;
             }

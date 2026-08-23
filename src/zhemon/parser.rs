@@ -100,10 +100,10 @@ impl<'a> Parser<'a> {
 
         self.cursor.consume_spaces();
 
-        if let Some(next_char) = self.cursor.peek() {
-            if Self::is_instruction(next_char) {
-                return Ok(ParsedCommand::SetAddress(address));
-            }
+        if let Some(next_char) = self.cursor.peek()
+            && Self::is_instruction(next_char)
+        {
+            return Ok(ParsedCommand::SetAddress(address));
         }
 
         Ok(ParsedCommand::ExamineOne(address))

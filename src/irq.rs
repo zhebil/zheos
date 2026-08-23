@@ -9,7 +9,8 @@ pub fn unmask() {
 
 const IRQ_COUNT: u32 = 64;
 
-struct HandlerTable(UnsafeCell<[Option<fn(u32)>; IRQ_COUNT as usize]>);
+type HandlerCells = [Option<fn(u32)>; IRQ_COUNT as usize];
+struct HandlerTable(UnsafeCell<HandlerCells>);
 
 // SAFETY: register() only runs before unmask(), and handle_interrupt() only
 // after, so on one core an access can never overlap another. Registering a

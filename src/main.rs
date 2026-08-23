@@ -44,8 +44,8 @@ mod gic;
 mod input;
 mod irq;
 mod mmio;
+mod print;
 mod ring_buffer;
-mod std;
 mod uart;
 mod zhemon;
 

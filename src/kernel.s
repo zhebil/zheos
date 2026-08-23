@@ -1,6 +1,8 @@
 .global _start
 
+// x0 holds the device tree pointer at entry, per the AArch64 boot protocol.
 _start:
+                mov     x19, x0
                 ldr     x0,  =__stack_top
                 mov     sp,  x0
                 ldr     x0,  =__bss_start
@@ -12,6 +14,7 @@ zero_bss_loop:
                 b       zero_bss_loop
 bss_done:
 rust_main:
+                mov     x0,  x19
                 bl      kmain
 
 loop:

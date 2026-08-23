@@ -1,14 +1,12 @@
 BIN    := $(shell rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin
 QEMU   := qemu-system-aarch64
 
-MEM      ?= 128M
-DTB_ADDR ?= 0x47000000
+MEM ?= 128M
 
-# QEMU does not hand an ELF kernel a device tree, so load one ourselves.
-DTBLOAD := -device loader,file=virt.dtb,addr=$(DTB_ADDR),force-raw=on
-
-QFLAGS := -M virt -cpu cortex-a72 -m $(MEM) -nographic -kernel kernel.elf $(DTBLOAD)
-MON    := -M virt -cpu cortex-a72 -m $(MEM) -display none -serial null -monitor stdio $(DTBLOAD)
+# A raw image, not the ELF: only then does QEMU build its Linux bootloader stub,
+# which generates a device tree, loads it, and passes its address in x0.
+QFLAGS := -M virt -cpu cortex-a72 -m $(MEM) -nographic -kernel kernel.bin
+MON    := -M virt -cpu cortex-a72 -m $(MEM) -display none -serial null -monitor stdio -kernel kernel.bin
 
 CARGO_OUT := target/aarch64-unknown-none-softfloat/release/zheos
 
@@ -18,32 +16,35 @@ kernel.elf:
 	cargo build --release
 	@cp $(CARGO_OUT) $@
 
-# dumpdtb writes the file and exits, so this is ~80ms. Always run, so the blob
-# tracks MEM instead of going stale.
+# QEMU strips the ELF headers for us; the load address stays the linked one.
+kernel.bin: kernel.elf
+	@$(BIN)/llvm-objcopy -O binary $< $@
+
+# Only for reading with dtc - the booted tree comes from QEMU itself now.
 virt.dtb:
 	@$(QEMU) -M virt,dumpdtb=$@ -cpu cortex-a72 -m $(MEM) -display none -serial null
 
-run: kernel.elf virt.dtb
+run: kernel.bin
 	$(QEMU) $(QFLAGS)
 
-debug: kernel.elf virt.dtb
+debug: kernel.bin
 	$(QEMU) $(QFLAGS) -s -S
 
-regs: kernel.elf virt.dtb
-	{ sleep 1; printf 'info registers\nquit\n'; } | $(QEMU) $(MON) -kernel kernel.elf \
+regs: kernel.bin
+	{ sleep 1; printf 'info registers\nquit\n'; } | $(QEMU) $(MON) \
 	  | tr '\r' '\n' | grep -E '^ ?(PC|SP|X[0-9])' | head -6
 
 ADDR ?= 0x40000000
 N    ?= 16
 FMT  ?= xb
 
-mem: kernel.elf virt.dtb
-	{ sleep 1; printf 'xp /$(N)$(FMT) $(ADDR)\nquit\n'; } | $(QEMU) $(MON) -kernel kernel.elf \
+mem: kernel.bin
+	{ sleep 1; printf 'xp /$(N)$(FMT) $(ADDR)\nquit\n'; } | $(QEMU) $(MON) \
 	  | tr '\r' '\n' | grep -E '^(0x)?[0-9a-f]+:'
 
 # Fill .bss with 0xAA and the 8 bytes just past it with 0xBB, then boot.
 # Correct zeroing => all 00 up to __bss_end, guard still BB.
-test-bss: kernel.elf virt.dtb
+test-bss: kernel.bin
 	@S=0x$$($(BIN)/llvm-nm kernel.elf | awk '/ __bss_start$$/{print $$1}'); \
 	E=0x$$($(BIN)/llvm-nm kernel.elf | awk '/ __bss_end$$/{print $$1}'); \
 	A=$$S; ARGS=""; \
@@ -54,15 +55,15 @@ test-bss: kernel.elf virt.dtb
 	ARGS="$$ARGS -device loader,addr=$$E,data=0xBBBBBBBBBBBBBBBB,data-len=8"; \
 	echo ".bss $$S .. $$E   guard $$E"; \
 	{ sleep 1; printf 'xp /%dxb %s\nquit\n' $$(( $$E - $$S + 8 )) $$S; } | \
-	  $(QEMU) $(MON) -kernel kernel.elf $$ARGS | tr '\r' '\n' | grep -E '^[0-9a-f]+:'
+	  $(QEMU) $(MON) $$ARGS | tr '\r' '\n' | grep -E '^[0-9a-f]+:'
 
 # Feed scripted keystrokes to the guest's serial input, capture output.
 #   make feed INPUT='1234'
 INPUT ?= abc123
-feed: kernel.elf virt.dtb
+feed: kernel.bin
 	@{ sleep 1; printf '$(INPUT)'; sleep 2; } | \
 	  $(QEMU) -M virt -cpu cortex-a72 -m $(MEM) -display none -serial stdio -monitor none \
-	  -kernel kernel.elf $(DTBLOAD)
+	  -kernel kernel.bin
 
 dis: kernel.elf
 	$(BIN)/llvm-objdump -d $<
@@ -88,7 +89,7 @@ syms: kernel.elf
 # ulimit -f is in 512-byte blocks; QEMU dies with SIGXFSZ instead of filling the disk.
 LOGCAP ?= 400000
 
-trace: kernel.elf virt.dtb
+trace: kernel.bin
 	rm -f /tmp/zheos.log
 	ulimit -f $(LOGCAP); $(QEMU) $(QFLAGS) -d int,in_asm -D /tmp/zheos.log
 
@@ -98,6 +99,6 @@ kill:
 
 clean:
 	cargo clean
-	rm -f kernel.elf kernel.asm virt.dtb
+	rm -f kernel.elf kernel.bin kernel.asm virt.dtb
 
 .PHONY: kernel.elf virt.dtb run debug regs mem test-bss feed dis asm lint sections syms trace kill clean

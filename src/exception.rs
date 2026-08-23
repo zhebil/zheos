@@ -1,4 +1,9 @@
-use crate::{cpu, print, println, uart::uart};
+use crate::cpu;
+
+// Deliberately allowed "use" or higher level layers as exception to the rule.
+use crate::uart::uart;
+use crate::{print, println};
+
 use core::{
     arch::{asm, global_asm},
     sync::atomic::{AtomicBool, Ordering},

@@ -1,8 +1,12 @@
+use crate::board::Gic;
+
 mod distributor {
-    use crate::board::GICD_BASE;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
     use crate::mmio;
-    // Base address of GIC Distributor
-    const BASE: usize = GICD_BASE;
+
+    // Base address of GIC Distributor, from the device tree.
+    static BASE: AtomicUsize = AtomicUsize::new(0);
 
     // Offset of GIC Distributor registers
     const CTLR: usize = 0x0;
@@ -25,8 +29,10 @@ mod distributor {
 
     const TARGET_CPU0: u8 = 0x01;
 
-    pub fn init() {
-        let typer = mmio::read_32(BASE + TYPER);
+    pub fn init(base: usize) {
+        BASE.store(base, Ordering::Relaxed);
+
+        let typer = mmio::read_32(base + TYPER);
 
         let it_lines_number = typer & IT_LINES_NUMBER_MASK;
 
@@ -36,29 +42,36 @@ mod distributor {
         assert!(n >= 32, "GICD_TYPER read {typer:#x} - wrong base?");
 
         // Enable distributor
-        mmio::write_32(BASE + CTLR, 1);
+        mmio::write_32(base + CTLR, 1);
     }
 
     pub fn enable(intid: u32) {
+        let base = BASE.load(Ordering::Relaxed);
+
         let block = intid as usize / 32;
         let bit = intid % 32;
-        let enable_addr = BASE + ISENABLER + block * 4;
+        let enable_addr = base + ISENABLER + block * 4;
 
         mmio::write_32(enable_addr, 1 << bit);
 
         // One byte per interrupt here, unlike the bit-per-interrupt ISENABLER above.
         if intid >= FIRST_SPI {
-            mmio::write_byte(BASE + ITARGETSR + intid as usize, TARGET_CPU0);
+            mmio::write_byte(base + ITARGETSR + intid as usize, TARGET_CPU0);
         }
     }
 }
 
 mod cpu {
-    use crate::board::GICC_BASE;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
     use crate::mmio;
 
-    // Base address of GIC CPU Interface
-    const BASE: usize = GICC_BASE;
+    // Base address of GIC CPU Interface, from the device tree.
+    static BASE: AtomicUsize = AtomicUsize::new(0);
+
+    fn base() -> usize {
+        BASE.load(Ordering::Relaxed)
+    }
 
     // Offset of GIC CPU Interface control register
     const CTLR: usize = 0x0;
@@ -76,28 +89,30 @@ mod cpu {
 
     pub const SPURIOUS_INTERRUPT_ID: u32 = 1023;
 
-    pub fn init() {
+    pub fn init(base: usize) {
+        BASE.store(base, Ordering::Relaxed);
+
         // Enable CPU interface
-        mmio::write_32(BASE + CTLR, 1);
+        mmio::write_32(base + CTLR, 1);
         // Allow any priority interrupts
-        mmio::write_32(BASE + PMR, 0xFF);
+        mmio::write_32(base + PMR, 0xFF);
     }
 
     pub fn acknowledge_interrupt() -> u32 {
         // Reading IAR returns the highest priority active interrupt and locks it
-        mmio::read_32(BASE + IAR)
+        mmio::read_32(base() + IAR)
     }
 
     pub fn end_of_interrupt(irq: u32) {
         // Writing to EOIR releases the interrupt and allows higher-priority interrupts to be signaled.
-        mmio::write_32(BASE + EOIR, irq);
+        mmio::write_32(base() + EOIR, irq);
     }
 }
 
-pub fn init() {
-    distributor::init();
+pub fn init(gic: &Gic) {
+    distributor::init(gic.distributor_base);
 
-    cpu::init();
+    cpu::init(gic.cpu_base);
 }
 
 #[must_use]

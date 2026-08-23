@@ -1,7 +1,8 @@
 use core::fmt::{Display, Write};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{
-    board::UART_BASE,
+    board::EARLYCON_UART,
     input::{self, InputByte},
 };
 
@@ -94,18 +95,14 @@ impl RxFlags {
     }
 }
 
-pub struct UARTDriver {
-    addr: usize,
-}
+static BASE: AtomicUsize = AtomicUsize::new(EARLYCON_UART);
+
+pub struct UARTDriver;
 
 impl UARTDriver {
     const UARTCLK: u32 = 24_000_000; // 24MHz
     const BAUD: u32 = 115_200;
     const SCALED_DIVISOR: u32 = (4 * Self::UARTCLK + Self::BAUD / 2) / Self::BAUD;
-
-    const fn new() -> Self {
-        Self { addr: UART_BASE }
-    }
 
     pub fn init(&self) {
         // Disable UART
@@ -163,13 +160,17 @@ impl UARTDriver {
         self.write_register(reg::ICR, icr::ALL_MASK);
     }
 
+    fn base() -> usize {
+        BASE.load(Ordering::Relaxed)
+    }
+
     fn read_register(&self, offset: usize) -> u32 {
-        let addr = (self.addr + offset) as *const u32;
+        let addr = (Self::base() + offset) as *const u32;
         unsafe { core::ptr::read_volatile(addr) }
     }
 
     fn write_register(&self, offset: usize, data: u32) {
-        let addr = (self.addr + offset) as *mut u32;
+        let addr = (Self::base() + offset) as *mut u32;
         unsafe { core::ptr::write_volatile(addr, data) }
     }
 
@@ -235,10 +236,17 @@ impl Display for RxFlags {
     }
 }
 
-static UART: UARTDriver = UARTDriver::new();
+static UART: UARTDriver = UARTDriver;
 
 pub fn uart() -> &'static UARTDriver {
     &UART
+}
+
+/// Moves the console to the address the device tree gave and brings it up
+/// there. Everything printed before this went to `EARLYCON_UART`.
+pub fn adopt(base: usize) {
+    BASE.store(base, Ordering::Relaxed);
+    uart().init();
 }
 
 pub fn handle_interrupt(_intid: u32) {

@@ -1,6 +1,8 @@
 use cursor::Cursor;
 use header::Header;
-use structure::{Nodes, read_cells};
+use structure::Nodes;
+
+pub use structure::Node;
 
 mod cursor;
 mod header;
@@ -8,8 +10,9 @@ mod structure;
 
 const ROOT_CHILD_DEPTH: u32 = 1;
 
-pub struct Memory {
-    pub addr: usize,
+/// One `(address, size)` pair out of a `reg` property.
+pub struct Region {
+    pub base: usize,
     pub size: usize,
 }
 
@@ -41,30 +44,32 @@ impl<'a> Dtb<'a> {
         })
     }
 
-    pub fn nodes(&self) -> Option<Nodes<'a>> {
+    /// A root child's `reg` is decoded with the root's cell counts, so every
+    /// lookup needs these first.
+    pub fn root_cells(&self) -> Option<(usize, usize)> {
+        Some(self.nodes()?.next()?.cells())
+    }
+
+    pub fn find_compatible(&self, compatible: &[u8]) -> Option<Node<'a>> {
+        self.find(|node| node.is_compatible(compatible))
+    }
+
+    pub fn find_memory(&self) -> Option<Node<'a>> {
+        self.find(|node| node.is_memory())
+    }
+
+    /// Root children only. Every device on `virt` is one, and anything deeper
+    /// would need a stack of its ancestors' cell counts to read `reg` at all.
+    fn find(&self, predicate: impl Fn(&Node<'a>) -> bool) -> Option<Node<'a>> {
+        self.nodes()?
+            .find(|node| node.depth() == ROOT_CHILD_DEPTH && predicate(node))
+    }
+
+    fn nodes(&self) -> Option<Nodes<'a>> {
         let start = self.header.off_dt_struct() as usize;
         let end = start + self.header.size_dt_struct() as usize;
         let struct_blob = self.blob.get(start..end)?;
         Some(Nodes::new(struct_blob, self.strings))
-    }
-
-    pub fn memory(&self) -> Option<Memory> {
-        let mut nodes = self.nodes()?;
-
-        // reg is an address in the parent's space, and /memory is a child of the root.
-        let (address_cells, size_cells) = nodes.next()?.cells();
-
-        let reg = nodes
-            .find(|node| node.depth() == ROOT_CHILD_DEPTH && node.is_memory())?
-            .property(b"reg")?;
-
-        let addr = read_cells(reg.value, address_cells)?;
-        let size = read_cells(reg.value.get(address_cells * 4..)?, size_cells)?;
-
-        Some(Memory {
-            addr: addr as usize,
-            size: size as usize,
-        })
     }
 }
 

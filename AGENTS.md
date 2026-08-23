@@ -96,6 +96,7 @@ make regs                         # boot, dump PC/SP/X0-X3, exit
 make mem ADDR=0x09000018 N=4 FMT=xw   # dump physical memory or device registers
 make feed INPUT='abc'             # pipe scripted keystrokes to the guest's serial input
 make test-bss                     # poison .bss, boot, verify it was zeroed (with a guard word)
+make lint                         # clippy -D warnings + rustfmt --check; the pre-commit gate
 make dis / sections / syms        # llvm-objdump / readobj / nm on kernel.elf
 make trace                        # -d int,in_asm with a size cap
 make kill                         # kill every stray qemu-system-aarch64

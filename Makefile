@@ -73,6 +73,12 @@ asm: kernel.elf
 	$(BIN)/llvm-objdump -d -S --no-show-raw-insn $< > kernel.asm
 	@echo "wrote kernel.asm ($$(grep -c . kernel.asm) lines)"
 
+# What the pre-commit hook runs. -D warnings makes every lint fatal. No
+# --all-targets: the test target wants libtest, which aarch64-unknown-none has not.
+lint:
+	cargo clippy --release -- -D warnings
+	cargo fmt --check
+
 sections: kernel.elf
 	$(BIN)/llvm-readobj --section-headers $<
 
@@ -94,4 +100,4 @@ clean:
 	cargo clean
 	rm -f kernel.elf kernel.asm virt.dtb
 
-.PHONY: kernel.elf virt.dtb run debug regs mem test-bss feed dis asm sections syms trace kill clean
+.PHONY: kernel.elf virt.dtb run debug regs mem test-bss feed dis asm lint sections syms trace kill clean

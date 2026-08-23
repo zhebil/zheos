@@ -14,6 +14,7 @@
   },
 
   "rust-analyzer.check.allTargets": false,
+  "rust-analyzer.check.command": "clippy",
   "rust-analyzer.checkOnSave": true,
   "rust-analyzer.imports.granularity.enforce": true,
 

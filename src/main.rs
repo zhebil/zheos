@@ -10,7 +10,7 @@ use core::{
 };
 
 use crate::{
-    board::{DTB_BASE, PSCI_SYSTEM_OFF, UART_INTID},
+    board::{Board, DTB_BASE, PSCI_SYSTEM_OFF},
     uart::uart,
 };
 
@@ -54,35 +54,54 @@ const TIMER_HZ: u32 = 100;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
+    // On the hardcoded earlycon base, so the two failures below have a console.
     uart().init();
 
     exception::install_vectors();
 
-    gic::init();
+    let Some(dtb) = (unsafe { dtb::Dtb::from_ptr(DTB_BASE) }) else {
+        println!("No device tree at {DTB_BASE:#010x}");
+        halt();
+    };
 
-    irq::register(UART_INTID, uart::handle_interrupt);
+    let board = match Board::discover(&dtb) {
+        Ok(board) => board,
+        Err(missing) => {
+            println!("Device tree has no {missing}");
+            halt();
+        }
+    };
+
+    uart::adopt(board.uart.base);
+
+    gic::init(&board.gic);
+
+    irq::register(board.uart.intid, uart::handle_interrupt);
     uart().enable_interrupt();
 
-    timer::init(TIMER_HZ);
+    timer::init(TIMER_HZ, board.timer_intid);
 
     irq::unmask();
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");
     println!("----------------------------------");
-
-    let memory = unsafe { dtb::Dtb::from_ptr(DTB_BASE) }.and_then(|dtb| dtb.memory());
-
-    if let Some(memory) = memory {
-        println!("{:#010x} {:x} bytes", memory.addr, memory.size);
-    } else {
-        println!("Memory not found");
-    }
+    println!("{:#010x} {:x} bytes", board.memory.base, board.memory.size);
 
     timer::sleep(Duration::from_secs(1));
     zhemon::Zhemon::new().start();
 
     shutdown()
+}
+
+/// Stops, but stays readable: powering off would leave nothing to attach to,
+/// and a dead machine looks exactly like a hung one from the outside.
+fn halt() -> ! {
+    uart().flush();
+
+    loop {
+        cpu::wait_for_interrupt();
+    }
 }
 
 pub fn shutdown() -> ! {

@@ -2,7 +2,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 
 use crate::{
-    board::TIMER_INTID,
     cpu::{
         self,
         generic_timer::{
@@ -26,7 +25,7 @@ static INTERVAL: AtomicU64 = AtomicU64::new(0);
 static HZ: AtomicU64 = AtomicU64::new(0);
 static KERNEL_TICKS: AtomicU64 = AtomicU64::new(0);
 
-pub fn init(hz: u32) {
+pub fn init(hz: u32, intid: u32) {
     assert!(hz > 0);
 
     let freq = read_freq() as u64;
@@ -35,7 +34,7 @@ pub fn init(hz: u32) {
     INTERVAL.store(interval, Ordering::Relaxed);
     HZ.store(hz as u64, Ordering::Relaxed);
 
-    irq::register(TIMER_INTID, handle_interrupt);
+    irq::register(intid, handle_interrupt);
 
     // TVAL is right for the first arm only: "interval from now" is what is meant
     // here. The reload below has to be absolute or the handler latency accumulates.

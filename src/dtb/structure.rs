@@ -1,9 +1,12 @@
-use crate::dtb::Strings;
 use crate::dtb::cursor::Cursor;
+use crate::dtb::{Region, Strings};
 
 // Defaults mandated by the spec for a node that declares neither.
 const DEFAULT_ADDRESS_CELLS: u32 = 2;
 const DEFAULT_SIZE_CELLS: u32 = 1;
+
+// `#interrupt-cells` on the GIC node: <kind, number, flags>.
+const INTERRUPT_CELLS: usize = 3;
 
 const TOKEN_BEGIN_NODE: u32 = 0x01;
 const TOKEN_END_NODE: u32 = 0x02;
@@ -99,6 +102,38 @@ impl<'a> Node<'a> {
             .is_some_and(|property| property.value == b"memory\0".as_slice())
     }
 
+    /// `compatible` is a list of NUL-terminated strings, not one string.
+    pub fn is_compatible(&self, compatible: &[u8]) -> bool {
+        self.property(b"compatible").is_some_and(|property| {
+            property
+                .value
+                .split(|&byte| byte == 0)
+                .any(|entry| entry == compatible)
+        })
+    }
+
+    /// One entry of `reg`, decoded with the parent's cell counts.
+    pub fn region(&self, index: usize, (address, size): (usize, usize)) -> Option<Region> {
+        let reg = self.property(b"reg")?;
+        let entry = reg.value.get(index * (address + size) * 4..)?;
+
+        Some(Region {
+            base: read_cells(entry, address)? as usize,
+            size: read_cells(entry.get(address * 4..)?, size)? as usize,
+        })
+    }
+
+    /// One entry of `interrupts` as `(kind, number)`. The third cell is trigger
+    /// flags, which one core behind a GICv2 has no use for.
+    pub fn interrupt(&self, index: usize) -> Option<(u32, u32)> {
+        let interrupts = self.property(b"interrupts")?;
+        let entry = interrupts.value.get(index * INTERRUPT_CELLS * 4..)?;
+
+        let mut cursor = Cursor::new(entry, 0);
+
+        Some((cursor.read_u32()?, cursor.read_u32()?))
+    }
+
     pub fn cells(&self) -> (usize, usize) {
         let cells = |name: &[u8], default| {
             self.property(name)
@@ -162,7 +197,7 @@ impl<'a> Property<'a> {
 }
 
 /// Reads `cells` big-endian u32s as one number. Two cells is the widest a u64 holds.
-pub fn read_cells(bytes: &[u8], cells: usize) -> Option<u64> {
+fn read_cells(bytes: &[u8], cells: usize) -> Option<u64> {
     if cells > 2 {
         return None;
     }

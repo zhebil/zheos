@@ -12,6 +12,7 @@ mod distributor {
     const CTLR: usize = 0x0;
 
     // Register containing information about the GIC Distributor
+    #[allow(dead_code)]
     const TYPER: usize = 0x4;
 
     const ISENABLER: usize = 0x100;
@@ -19,10 +20,8 @@ mod distributor {
     const ITARGETSR: usize = 0x800;
 
     // Mask for the number of interrupt lines
+    #[allow(dead_code)]
     const IT_LINES_NUMBER_MASK: u32 = 0x1F;
-
-    // Number of interrupt lines per block
-    const LINES_PER_BLOCK: u32 = 32;
 
     // SGIs and PPIs are always delivered to the local core; only SPIs need routing.
     const FIRST_SPI: u32 = 32;
@@ -31,15 +30,6 @@ mod distributor {
 
     pub fn init(base: usize) {
         BASE.store(base, Ordering::Relaxed);
-
-        let typer = mmio::read_32(base + TYPER);
-
-        let it_lines_number = typer & IT_LINES_NUMBER_MASK;
-
-        // Number of interrupt lines
-        let n = LINES_PER_BLOCK * (it_lines_number + 1);
-
-        assert!(n >= 32, "GICD_TYPER read {typer:#x} - wrong base?");
 
         // Enable distributor
         mmio::write_32(base + CTLR, 1);

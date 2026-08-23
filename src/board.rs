@@ -4,8 +4,6 @@ use crate::dtb::{Dtb, Node, Region};
 /// prints the message saying the device tree could not be read.
 pub const EARLYCON_UART: usize = 0x0900_0000;
 
-pub const DTB_BASE: usize = 0x4700_0000;
-
 // Each doubles as its own error message, so a failed lookup names what it wanted.
 const MEMORY: &str = "/memory";
 const UART: &str = "arm,pl011";

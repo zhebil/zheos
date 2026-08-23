@@ -11,7 +11,7 @@ use core::{
 };
 
 use crate::{
-    board::{Board, Conduit, DTB_BASE},
+    board::{Board, Conduit},
     uart::uart,
 };
 
@@ -56,14 +56,14 @@ mod zhemon;
 const TIMER_HZ: NonZeroU32 = NonZeroU32::new(100).unwrap();
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kmain() -> ! {
+pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     // On the hardcoded earlycon base, so the two failures below have a console.
     uart().init();
 
     exception::install_vectors();
 
-    let Some(dtb) = (unsafe { dtb::Dtb::from_ptr(DTB_BASE) }) else {
-        println!("No device tree at {DTB_BASE:#010x}");
+    let Some(dtb) = (unsafe { dtb::Dtb::from_ptr(dtb_ptr) }) else {
+        println!("No device tree at {dtb_ptr:#010x}");
         halt();
     };
 

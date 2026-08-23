@@ -4,6 +4,7 @@
 use core::{
     arch::{asm, global_asm},
     fmt::Write,
+    num::NonZeroU32,
     panic::PanicInfo,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
@@ -50,7 +51,8 @@ mod timer;
 mod uart;
 mod zhemon;
 
-const TIMER_HZ: u32 = 100;
+// Checked when the constant is evaluated, so timer::init needs no runtime guard.
+const TIMER_HZ: NonZeroU32 = NonZeroU32::new(100).unwrap();
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {

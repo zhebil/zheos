@@ -1,7 +1,7 @@
-use crate::uart::uart;
-use crate::{cpu, gic};
+use crate::cpu;
+use crate::gic;
+use crate::println;
 use core::cell::UnsafeCell;
-use core::fmt::Write;
 
 pub fn unmask() {
     cpu::unmask_irqs();
@@ -21,33 +21,29 @@ impl HandlerTable {
         Self(UnsafeCell::new([None; IRQ_COUNT as usize]))
     }
 
-    fn set(&self, intid: u32, handler: fn(u32)) {
-        unsafe { (*self.0.get())[intid as usize] = Some(handler) }
+    fn set(&self, intid: u32, handler: fn(u32)) -> bool {
+        let Some(slot) = (unsafe { (*self.0.get()).get_mut(intid as usize) }) else {
+            return false;
+        };
+
+        *slot = Some(handler);
+        true
     }
 
     fn get(&self, intid: u32) -> Option<fn(u32)> {
-        unsafe { (*self.0.get())[intid as usize] }
+        unsafe { *(*self.0.get()).get(intid as usize)? }
     }
 }
 
 static HANDLERS: HandlerTable = HandlerTable::new();
 
 pub fn register(intid: u32, handler: fn(u32)) {
-    if intid >= IRQ_COUNT {
-        panic!("Invalid IRQ number: {}", intid);
+    if !HANDLERS.set(intid, handler) {
+        println!("IRQ {intid} is past the {IRQ_COUNT} the handler table holds");
+        return;
     }
-
-    HANDLERS.set(intid, handler);
 
     gic::enable(intid);
-}
-
-fn lookup_handler(intid: u32) -> Option<fn(u32)> {
-    if intid >= IRQ_COUNT {
-        return None;
-    }
-
-    HANDLERS.get(intid)
 }
 
 #[unsafe(no_mangle)]
@@ -58,10 +54,10 @@ pub extern "C" fn handle_interrupt() {
 
     let intid = interrupt.intid();
 
-    match lookup_handler(intid) {
+    match HANDLERS.get(intid) {
         Some(handler) => handler(intid),
         None => {
-            let _ = writeln!(uart(), "No handler for IRQ {}", intid);
+            println!("No handler for IRQ {}", intid);
         }
     }
 

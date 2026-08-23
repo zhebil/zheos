@@ -1,3 +1,4 @@
+use core::num::NonZeroU32;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 
@@ -25,14 +26,12 @@ static INTERVAL: AtomicU64 = AtomicU64::new(0);
 static HZ: AtomicU64 = AtomicU64::new(0);
 static KERNEL_TICKS: AtomicU64 = AtomicU64::new(0);
 
-pub fn init(hz: u32, intid: u32) {
-    assert!(hz > 0);
-
+pub fn init(hz: NonZeroU32, intid: u32) {
     let freq = read_freq() as u64;
-    let interval = freq / hz as u64;
+    let interval = freq / hz.get() as u64;
 
     INTERVAL.store(interval, Ordering::Relaxed);
-    HZ.store(hz as u64, Ordering::Relaxed);
+    HZ.store(hz.get() as u64, Ordering::Relaxed);
 
     irq::register(intid, handle_interrupt);
 

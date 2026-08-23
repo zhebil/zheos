@@ -1,3 +1,5 @@
+use core::fmt::Display;
+
 use cursor::Cursor;
 use header::Header;
 use structure::Nodes;
@@ -11,9 +13,16 @@ mod structure;
 const ROOT_CHILD_DEPTH: u32 = 1;
 
 /// One `(address, size)` pair out of a `reg` property.
+#[derive(Debug)]
 pub struct Region {
     pub base: usize,
     pub size: usize,
+}
+
+impl Display for Region {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:010x}: {:x} bytes", self.base, self.size)
+    }
 }
 
 pub struct Dtb<'a> {
@@ -56,6 +65,13 @@ impl<'a> Dtb<'a> {
 
     pub fn find_memory(&self) -> Option<Node<'a>> {
         self.find(|node| node.is_memory())
+    }
+
+    pub fn region(&self) -> Region {
+        Region {
+            base: self.blob.as_ptr() as usize,
+            size: self.blob.len(),
+        }
     }
 
     /// Root children only. Every device on `virt` is one, and anything deeper

@@ -37,6 +37,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
 }
 
 mod board;
+mod bump;
 mod console;
 mod cpu;
 mod dtb;
@@ -86,10 +87,15 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     irq::unmask();
 
+    let image = bump::image();
+
+    println!("image: {}", image);
+    println!("dtb: {}", dtb.region());
+    println!("memory: {}", board.memory);
+
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");
     println!("----------------------------------");
-    println!("{:#010x} {:x} bytes", board.memory.base, board.memory.size);
 
     timer::sleep(Duration::from_secs(1));
     zhemon::Zhemon::new().start();

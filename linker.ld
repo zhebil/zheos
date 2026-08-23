@@ -4,6 +4,8 @@ SECTIONS
 {
   . = 0x40080000;
 
+  __image_start = .;
+
   .text : {
     *(.text*)
   }

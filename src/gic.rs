@@ -1,6 +1,6 @@
 mod distributor {
     use crate::board::GICD_BASE;
-    use crate::mem;
+    use crate::mmio;
     // Base address of GIC Distributor
     const BASE: usize = GICD_BASE;
 
@@ -26,7 +26,7 @@ mod distributor {
     const TARGET_CPU0: u8 = 0x01;
 
     pub fn init() {
-        let typer = mem::read_32(BASE + TYPER);
+        let typer = mmio::read_32(BASE + TYPER);
 
         let it_lines_number = typer & IT_LINES_NUMBER_MASK;
 
@@ -36,7 +36,7 @@ mod distributor {
         assert!(n >= 32, "GICD_TYPER read {typer:#x} - wrong base?");
 
         // Enable distributor
-        mem::write_32(BASE + CTLR, 1);
+        mmio::write_32(BASE + CTLR, 1);
     }
 
     pub fn enable(intid: u32) {
@@ -44,18 +44,18 @@ mod distributor {
         let bit = intid % 32;
         let enable_addr = BASE + ISENABLER + block * 4;
 
-        mem::write_32(enable_addr, 1 << bit);
+        mmio::write_32(enable_addr, 1 << bit);
 
         // One byte per interrupt here, unlike the bit-per-interrupt ISENABLER above.
         if intid >= FIRST_SPI {
-            mem::write_byte(BASE + ITARGETSR + intid as usize, TARGET_CPU0);
+            mmio::write_byte(BASE + ITARGETSR + intid as usize, TARGET_CPU0);
         }
     }
 }
 
 mod cpu {
     use crate::board::GICC_BASE;
-    use crate::mem;
+    use crate::mmio;
 
     // Base address of GIC CPU Interface
     const BASE: usize = GICC_BASE;
@@ -78,19 +78,19 @@ mod cpu {
 
     pub fn init() {
         // Enable CPU interface
-        mem::write_32(BASE + CTLR, 1);
+        mmio::write_32(BASE + CTLR, 1);
         // Allow any priority interrupts
-        mem::write_32(BASE + PMR, 0xFF);
+        mmio::write_32(BASE + PMR, 0xFF);
     }
 
     pub fn acknowledge_interrupt() -> u32 {
         // Reading IAR returns the highest priority active interrupt and locks it
-        mem::read_32(BASE + IAR)
+        mmio::read_32(BASE + IAR)
     }
 
     pub fn end_of_interrupt(irq: u32) {
         // Writing to EOIR releases the interrupt and allows higher-priority interrupts to be signaled.
-        mem::write_32(BASE + EOIR, irq);
+        mmio::write_32(BASE + EOIR, irq);
     }
 }
 

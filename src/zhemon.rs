@@ -1,4 +1,4 @@
-use crate::{console, mem, print, println, uart::uart};
+use crate::{console, mmio, print, println, uart::uart};
 use console::{Line, read_line, write_new_line};
 use parser::{LineParseError, ParsedCommand, Parser};
 
@@ -83,7 +83,7 @@ impl Zhemon {
 
     fn handle_examine_one(&mut self, address: u64) {
         self.last_address = address;
-        let byte = mem::read_byte(address as usize);
+        let byte = mmio::read_byte(address as usize);
         println!("{:016x}: {:02x}", address, byte);
         self.next_address = address + 1;
     }
@@ -119,14 +119,14 @@ impl Zhemon {
             }
 
             // Write bytes
-            let byte = mem::read_byte(address as usize);
+            let byte = mmio::read_byte(address as usize);
             print!(" {:02x}", byte);
         }
         write_new_line();
     }
 
     fn handle_store_continuing(&mut self, byte: u8) {
-        mem::write_byte(self.next_address as usize, byte);
+        mmio::write_byte(self.next_address as usize, byte);
         self.next_address += 1;
     }
 

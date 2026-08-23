@@ -44,7 +44,7 @@ mod exception;
 mod gic;
 mod input;
 mod irq;
-mod mem;
+mod mmio;
 mod ring_buffer;
 mod std;
 mod timer;

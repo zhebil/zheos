@@ -1,4 +1,4 @@
-use crate::mem::read_32;
+use crate::mmio::read_32;
 
 fn be_read_from_arr(arr: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes(*arr.get(offset..)?.first_chunk()?))

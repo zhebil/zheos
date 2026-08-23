@@ -21,7 +21,7 @@ byte there prints a character.
 The project is run as a survival game. The machine starts with a CPU, some RAM, and a few
 devices at fixed addresses - no OS, no library, no `print`, no allocator. Every ability it
 ever has, the user builds. Each issue in beads is a **skill**; its dependencies are real
-technical prerequisites, not arbitrary ordering. `ROADMAP.md` is the map, and it is not
+technical prerequisites, not arbitrary ordering. `docs/roadmap.md` is the map, and it is not
 authoritative - beads is.
 
 Use this framing when talking about progress. It is not decoration: it is why "one step at a

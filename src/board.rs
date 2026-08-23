@@ -6,14 +6,13 @@ pub const EARLYCON_UART: usize = 0x0900_0000;
 
 pub const DTB_BASE: usize = 0x4700_0000;
 
-// PSCI (Power State Coordination Interface) function ID for SYSTEM_OFF.
-pub const PSCI_SYSTEM_OFF: usize = 0x8400_0008;
-
 // Each doubles as its own error message, so a failed lookup names what it wanted.
 const MEMORY: &str = "/memory";
 const UART: &str = "arm,pl011";
 const GIC: &str = "arm,cortex-a15-gic";
 const TIMER: &str = "arm,armv8-timer";
+// 0.1 predates the standard function IDs, so anything older than this is a miss.
+const PSCI: &str = "arm,psci-0.2";
 
 /// The timer's `interrupts` lists secure physical, non-secure physical, virtual
 /// and hypervisor. CNTP_* drives the second.
@@ -26,11 +25,20 @@ const PPI: u32 = 1;
 const PPI_BASE: u32 = 16;
 const SPI_BASE: u32 = 32;
 
+/// Which instruction reaches the PSCI implementation, which depends on the
+/// privilege level it runs at: EL2 for a hypervisor, EL3 for secure firmware.
+#[derive(Clone, Copy)]
+pub enum Conduit {
+    Hvc,
+    Smc,
+}
+
 pub struct Board {
     pub uart: Device,
     pub gic: Gic,
     pub memory: Region,
     pub timer_intid: u32,
+    pub psci: Conduit,
 }
 
 pub struct Gic {
@@ -69,11 +77,19 @@ impl Board {
         let node = dtb.find_compatible(TIMER.as_bytes()).ok_or(TIMER)?;
         let timer_intid = intid(&node, NON_SECURE_PHYSICAL).ok_or(TIMER)?;
 
+        let node = dtb.find_compatible(PSCI.as_bytes()).ok_or(PSCI)?;
+        let psci = match node.property(b"method").ok_or(PSCI)?.value {
+            b"hvc\0" => Conduit::Hvc,
+            b"smc\0" => Conduit::Smc,
+            _ => return Err(PSCI),
+        };
+
         Ok(Board {
             uart,
             gic,
             memory,
             timer_intid,
+            psci,
         })
     }
 }

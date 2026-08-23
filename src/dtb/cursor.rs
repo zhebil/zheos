@@ -27,7 +27,7 @@ impl<'a> Cursor<'a> {
         let bytes = self.blob.get(self.offset..)?;
         let len = bytes.iter().position(|&byte| byte == 0)?;
         self.offset += len + 1;
-        Some(bytes.get(..len)?)
+        bytes.get(..len)
     }
 
     pub fn done(&self) -> bool {

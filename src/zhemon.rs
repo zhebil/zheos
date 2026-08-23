@@ -37,7 +37,7 @@ impl Zhemon {
             }
 
             if line.buf == b"exit" {
-                return ();
+                return;
             }
 
             match Parser::new(line.buf).validate() {
@@ -131,7 +131,7 @@ impl Zhemon {
     }
 
     fn handle_run(&mut self) {
-        if self.last_address % 4 != 0 {
+        if !self.last_address.is_multiple_of(4) {
             println!("Error: Address is not aligned");
         } else {
             let f: extern "C" fn() =

@@ -61,12 +61,12 @@ impl From<u64> for ESRClass {
     }
 }
 
-struct ESR {
+struct Esr {
     class: ESRClass,
     syndrome: u64,
 }
 
-impl ESR {
+impl Esr {
     fn new(val: u64) -> Self {
         Self {
             class: ESRClass::from((val >> 26) & 0x3F),
@@ -101,7 +101,7 @@ pub extern "C" fn handle_exception(
             if kind == 1 { "unexpected slot" } else { "sync" }
         );
 
-        let esr = ESR::new(esr_el1);
+        let esr = Esr::new(esr_el1);
         println!("Exception Syndrome Register: {:#018x}", esr_el1);
         print!("Exception Syndrome Class: ");
         match &esr.class {

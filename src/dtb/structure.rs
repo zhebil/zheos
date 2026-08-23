@@ -158,29 +158,25 @@ impl<'a> Iterator for Properties<'a> {
     type Item = Property<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.cursor.done() {
-                return None;
+        if self.cursor.done() {
+            return None;
+        }
+
+        let token = self.cursor.read_u32()?;
+        match token {
+            TOKEN_PROP => {
+                let len = self.cursor.read_u32()? as usize;
+
+                let name_offset = self.cursor.read_u32()? as usize;
+
+                let name = self.strings.string_at(name_offset)?;
+                let value = self.cursor.bytes(len)?;
+
+                self.cursor.align_u32();
+
+                Some(Property { name, value })
             }
-
-            let token = self.cursor.read_u32()?;
-            match token {
-                TOKEN_PROP => {
-                    let len = self.cursor.read_u32()? as usize;
-
-                    let name_offset = self.cursor.read_u32()? as usize;
-
-                    let name = self.strings.string_at(name_offset)?;
-                    let value = self.cursor.bytes(len)?;
-
-                    self.cursor.align_u32();
-
-                    return Some(Property { name, value });
-                }
-                _ => {
-                    return None;
-                }
-            };
+            _ => None,
         }
     }
 }

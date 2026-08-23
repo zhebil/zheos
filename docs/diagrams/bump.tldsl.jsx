@@ -70,9 +70,6 @@ export default function Diagram() {
           <Step id="none" color="red" label={"return None\n\nnext UNCHANGED"} />
 
           <Step id="commit" color="green" label={"next = finish\nreturn start"} />
-
-          <Note id="loopnote" w="300" head="the yes-branch is not an edge case"
-            body="The very first allocation takes it: next starts at RAM base, hits the image, jumps clear. This is memblock's for_each_free_mem_range - it walks two lists at once, yours walks one list and a pointer." />
         </Frame>
 
         <Frame id="traps" name="The three things that go wrong in there" layout="col" gap="40" pad="36">
@@ -110,6 +107,7 @@ export default function Diagram() {
       <Edge from="past" to="none" label="yes" color="red" />
       <Edge from="past" to="commit" label="no" color="green" />
 
+      <Sticky on="commit">The yes-branch is not an edge case: the very first allocation takes it, hits the image, and jumps clear.</Sticky>
       <Sticky on="dtb">QEMU pads virt.dtb to 1 MiB and writes the padded length into totalsize. Linux reserves the same megabyte.</Sticky>
     </Doc>
   );

@@ -2,7 +2,6 @@
 #![no_main]
 
 use core::{
-    alloc::Layout,
     arch::global_asm,
     fmt::Write,
     num::NonZeroU32,
@@ -103,17 +102,13 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
             halt();
         }
     };
-    let remain_mem = bump.remaining();
-    println!("remains memory: {}", remain_mem);
-
-    let l = Layout::new::<u64>();
-    match bump.alloc(l) {
-        Some(ptr) => println!("ptr: {:#012x}", ptr.addr()),
-        None => println!("no space for 8 bytes"),
-    };
-
-    let remain_mem = bump.remaining();
-    println!("remains memory: {}", remain_mem);
+    match bump::self_check(&mut bump) {
+        Ok(()) => println!("bump: {} bytes free", bump.remaining()),
+        Err(broken) => {
+            println!("Bump self-check: {broken}");
+            halt();
+        }
+    }
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");

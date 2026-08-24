@@ -24,6 +24,11 @@
     "editor.tabSize": 4
   },
 
+  "editor.defaultFormatter": "oxc.oxc-vscode",
+  "oxc.path.oxfmt": "/Users/zhebil/.local/share/fnm/node-versions/v24.15.0/installation/bin/oxfmt",
+  "oxc.path.oxlint": "/Users/zhebil/.local/share/fnm/node-versions/v24.15.0/installation/bin/oxlint",
+  "oxc.path.node": "/Users/zhebil/.local/share/fnm/node-versions/v24.15.0/installation/bin/node",
+  "editor.formatOnSave": true,
   "editor.rulers": [100],
   "files.trimTrailingWhitespace": true,
   "files.insertFinalNewline": true,

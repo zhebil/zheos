@@ -4,6 +4,14 @@ pub fn wait_for_interrupt() {
     unsafe { asm!("wfi") }
 }
 
+/// The current stack pointer. `sp` is not a general register, so it has to be
+/// moved into one before it can be read.
+pub fn stack_pointer() -> usize {
+    let sp: usize;
+    unsafe { asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags)) };
+    sp
+}
+
 /// Unmasks IRQ and FIQ. `daifclr` *clears* mask bits - the opposite of `daifset`.
 pub fn unmask_irqs() {
     unsafe {

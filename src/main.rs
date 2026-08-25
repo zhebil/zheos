@@ -2,7 +2,6 @@
 #![no_main]
 
 use core::{
-    alloc::Layout,
     arch::global_asm,
     fmt::Write,
     num::NonZeroU32,
@@ -14,6 +13,8 @@ use core::{
 use crate::{
     board::{Board, Conduit},
     bump::Bump,
+    region::Region,
+    tables::Table,
     uart::uart,
 };
 
@@ -52,6 +53,7 @@ mod print;
 mod psci;
 mod region;
 mod ring_buffer;
+mod tables;
 mod timer;
 mod uart;
 mod zhemon;
@@ -103,17 +105,47 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
             halt();
         }
     };
-    let remain_mem = bump.remaining();
-    println!("remains memory: {}", remain_mem);
 
-    let l = Layout::new::<u64>();
-    match bump.alloc(l) {
-        Some(ptr) => println!("ptr: {:#012x}", ptr.addr()),
-        None => println!("no space for 8 bytes"),
+    let Some(mut table) = Table::new(&mut bump) else {
+        println!("No room for a translation table");
+        halt();
     };
 
-    let remain_mem = bump.remaining();
-    println!("remains memory: {}", remain_mem);
+    match table.identity_map(
+        &mut bump,
+        Region {
+            base: 0,
+            size: 0x4000_0000,
+        },
+        tables::Memory::DeviceBlock,
+    ) {
+        Ok(_) => {
+            println!("mapped devices");
+        }
+        Err(_) => {
+            println!("Failed to map devices");
+        }
+    };
+
+    match table.identity_map(&mut bump, board.memory, tables::Memory::NormalBlock) {
+        Ok(_) => {
+            println!("mapped memory");
+        }
+        Err(_) => {
+            println!("Failed to map memory");
+        }
+    };
+
+    println!("table:  {:#012x}", table.base());
+    println!("remains memory: {}", bump.remaining());
+    table.print_map();
+
+    println!("0x0900_0000 → {:?}", table.translate(0x0900_0000));
+    println!("0x4008_0000 → {:?}", table.translate(0x4008_0000));
+    println!("0x4400_0000 → {:?}", table.translate(0x4400_0000));
+    println!("0x4800_0000 → {:?}", table.translate(0x4800_0000));
+    println!("0x9000_0000 → {:?}", table.translate(0x9000_0000));
+    println!("sp          → {:?}", table.translate(cpu::stack_pointer()));
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");

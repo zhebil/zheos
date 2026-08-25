@@ -7,6 +7,7 @@ SECTIONS
   __image_start = .;
 
   .text : {
+    KEEP(*(.text._start))
     *(.text*)
   }
 

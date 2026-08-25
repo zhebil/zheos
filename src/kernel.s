@@ -1,4 +1,8 @@
 .global _start
+// Its own section, so linker.ld can place it first. kernel.bin is a raw image:
+// QEMU jumps to the first byte, which must be this instruction and not whatever
+// function the linker happened to emit first.
+.section .text._start, "ax"
 
 // x0 holds the device tree pointer at entry, per the AArch64 boot protocol.
 _start:

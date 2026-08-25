@@ -22,7 +22,7 @@ pub struct Full;
 const IMAGE: &str = "kernel image";
 const DEVICE_TREE: &str = "device tree";
 
-const RESERVED_LEN: usize = 8;
+const RESERVED_LEN: usize = 16;
 
 pub struct Bump {
     next: usize,

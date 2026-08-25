@@ -1,814 +1,588 @@
-# TABLES - the tree that turns an address into a different address
+# TABLES - teaching the CPU to rewrite addresses
 
-Every address this kernel has ever used went straight onto the bus. `0x0900_0000` meant the
-UART because the UART is wired at `0x0900_0000`. There has been no indirection anywhere, which
-is why the machine has been so easy to reason about: `make mem ADDR=0x09000018` and the kernel
-are looking at the same thing through the same eyes.
+## 1. What this is for
 
-That ends here. A **translation table** is a tree in memory that the CPU's hardware walks on
-every single load, store and instruction fetch, to convert the address the code used into the
-address that reaches the bus. Once it is on, a pointer is a lookup key rather than a location.
+Right now, when your code says `0x0900_0000`, the number `0x0900_0000` goes out on the wires and
+the UART answers. The address in your register *is* the address on the bus. No step in between.
 
-This skill builds the tree and stops. `zheos-f27` turns it on. That split is deliberate and it
-is the single most important thing about the ordering: with the MMU off you can build a
-completely wrong set of tables and the machine will not so much as flinch, which means you get
-to inspect and correct them with a working UART, a working timer and a working shell. The
-instant you flip `SCTLR_EL1.M`, a mistake in bit 10 of one descriptor means the next
-instruction fetch faults, the fault handler's own instruction fetch faults, and the machine is
-gone with nothing on the screen.
+You are about to add a step in between. From now on the CPU will take every address your code
+uses, look it up in a table you built, and put a *different* number on the bus.
 
-So: build it, print it, walk it by hand, check the hex against numbers you computed on paper.
-Then, next skill, turn it on.
+That sounds like a pointless indirection, and for the first version it literally is - you are
+going to build a table that maps every address to itself. Nothing will change. That is on
+purpose. Once the lookup step exists, you get things that are impossible without it:
 
-Sections 3 and 4 are the ones that decide whether this works. Section 3 is what the hardware
-actually does on every access. Section 4 is the 64 bits that tell it to.
+- **Memory that faults instead of silently working.** Today a wild pointer to `0x4900_0000`
+  writes into nothing and keeps going. With a lookup, an address you never put in the table
+  makes the CPU stop and tell you.
+- **Read-only code.** You can mark the region holding your instructions as "reads allowed,
+  writes not". A bug that scribbles on `.text` becomes an error message instead of a crash
+  twenty minutes later.
+- **A guard page under the stack.** Your stack is 32 KiB with nothing below it, so a deep
+  recursion quietly eats `.bss`. Leave one page below it out of the table and overflow becomes
+  an immediate fault.
+- **Two programs at the same address.** Every process thinking it owns `0x1000` is the whole
+  reason this machinery exists in the first place. Far away, but that is the destination.
 
----
-
-## 1. Vocabulary
-
-**Virtual address (VA)** - the number in your code, in a register, in the program counter. With
-the MMU off there is no such thing; with it on, it is every address.
-
-**Physical address (PA)** - the number that reaches the bus and selects RAM or a device. What
-you have been using all along.
-
-**Translation** - the mapping from one to the other. Not a function you call. A thing the
-hardware does, invisibly, on every access, using tables you left in memory.
-
-**Translation table** - one node of the tree. On this machine it is exactly one 4 KiB page
-holding 512 entries of 8 bytes. Sometimes called a page table, or by its Linux level names
-(pgd, pud, pmd, pte).
-
-**Descriptor** - one 8-byte entry in a table. Section 4 is the whole of it.
-
-**Level** - how deep in the tree. Levels are numbered 0, 1, 2, 3 going *down*, and each level
-resolves 9 bits of the address. Level 0 is the root; level 3 is the leaf.
-
-**Granule** - the smallest mappable unit, and the table size. 4 KiB here. The architecture also
-offers 16 KiB and 64 KiB, which change every number in this document.
-
-**Block descriptor** - a leaf that appears above level 3, mapping a large aligned chunk in one
-entry: 1 GiB at level 1, 2 MiB at level 2. The reason a 128 MiB identity map is 64 entries
-rather than 32768.
-
-**Page descriptor** - a leaf at level 3, mapping one 4 KiB granule.
-
-**Table descriptor** - a non-leaf, holding the physical address of the table one level down.
-
-**Identity map** - a map where VA equals PA for every address. It changes nothing about what
-any address means, which is exactly why it is the right first map: turning the MMU on with an
-identity map is a no-op you can observe.
-
-**TTBR0_EL1 / TTBR1_EL1** - the two registers holding the root table's physical address. The
-CPU picks between them by the top bits of the VA: low addresses use TTBR0, high addresses
-(`0xFFFF_...`) use TTBR1. Kernels normally live in TTBR1. You will use TTBR0 only, because your
-kernel is at `0x4008_0000` and it is staying there.
-
-**MAIR_EL1** - eight bytes in one register, each describing a *type* of memory: cacheable,
-device, write-through. A descriptor does not carry the type; it carries a 3-bit index into
-this register. Section 6.
-
-**Access Flag (AF)** - one bit in every leaf descriptor. If it is zero, the access faults.
-Section 11 exists mostly for this bit.
-
-**TLB** - the cache of recently walked translations inside the CPU. Not this skill's problem
-while the MMU is off, and the first thing to suspect once it is on and you change a table.
-
-**Data abort** - the exception raised when a load or store cannot be translated or is not
-permitted. Every mistake in this document arrives as one. `src/exception.rs` already prints
-them; section 8's optional step makes them say why.
+This skill builds the table. It does **not** switch it on - that is the next skill,
+`zheos-f27`. Section 8 explains why splitting it that way is the single most useful decision
+here.
 
 ---
 
-## 2. Where you are now
+## 2. Is this a hardware thing or a software thing
 
-The machine, verified this session:
+This was the question, and it deserves a straight answer, because the situation is genuinely
+unusual and nothing else in the project works this way.
 
-```
-0x0000_0000 ┌──────────────────┐
-            │ pflash 0 and 1   │  unused with -kernel
-0x0800_0000 │ gic_dist         │
-0x0801_0000 │ gic_cpu          │
-0x0900_0000 │ pl011  ← UART    │   DEVICE MEMORY
-0x0901_0000 │ pl031  rtc       │
-0x0903_0000 │ pl061  gpio      │
-0x0A00_0000 │ virtio-mmio x32  │
-            ├──────────────────┤
-            │   unmapped       │
-0x4000_0000 ├──────────────────┤  RAM base, from /memory
-            │ free, 512 KiB    │
-0x4008_0000 │ kernel image     │  __image_start        NORMAL MEMORY
-0x4008_dbd0 │ .. __stack_top   │
-            │ free RAM         │
-0x4400_0000 │ device tree blob │  1 MiB, from x0
-0x4410_0000 │ free RAM         │
-0x4800_0000 └──────────────────┘  RAM end
-```
+**The format is hardware. The bytes are yours.**
 
-`PSTATE` says `EL1h`: exception level 1, using `SP_EL1`. EL1 is where a kernel belongs, and it
-is the level whose translation regime you are about to configure. There is no EL2 or EL3
-software in the way - QEMU dropped you straight here.
+Inside the CPU there is a lump of circuitry called the **MMU** - Memory Management Unit. Part of
+it is a small hardware state machine called the **table walker**. When it is switched on, that
+circuit reads bytes out of your RAM and interprets them, on every load, every store, and every
+instruction fetch.
 
-Two things you built are the reason this skill can happen now:
+So:
 
-`board.memory` is `Region { 0x4000_0000, 0x0800_0000 }`, from the device tree. That is what to
-map as RAM, and it is not a constant in your source.
+- **You build the tables from scratch.** No library gives them to you. No firmware left any
+  behind. They are just some `u64` values you write into memory you got out of your bump
+  allocator. Right now that memory holds garbage, and if you switched the MMU on this second the
+  machine would follow that garbage and die.
+- **The layout is not up for discussion.** It is not a convention the community settled on, like
+  a file format or a protocol. ARM chose it, wrote it into the transistors, and shipped it. Bit
+  10 means "access allowed" because a wire in the chip is connected to bit 10.
 
-`Bump` hands out 4 KiB-aligned physical memory. Page tables are 4 KiB and must be built out of
-physical memory, because the thing that reads them is the hardware walker, which by definition
-works underneath translation. That is the sentence from `docs/bump.md` section 10, and this is
-where it gets cashed.
+You already do exactly this, every day, with the UART. When `uart.rs` writes `0x301` into the
+control register, that is not a number anyone agreed on in a mailing list - it is the bit pattern
+the PL011's internal wiring reacts to. Page tables are the same deal, just bigger: instead of a
+32-bit register you are filling in a few thousand bytes of RAM, and instead of a UART reading
+them it is a circuit inside the CPU.
 
-One thing you built that is about to become load-bearing in a way it has not been:
-`Bump::alloc` **does not zero**. A table is 512 descriptors and you are going to write two of
-them. The other 510 have to be zero, because zero means "invalid" and anything else means "here
-is a page, go read it". Uninitialised memory in a translation table is the hardware following a
-random pointer into a random address with random permissions. Zero the table yourself, in
-`Table::new`, immediately.
+The consequence is that you cannot design this part. Linux, FreeBSD, and your kernel all write
+the *identical* bit layout, because none of them has a choice. What you get to design is which
+addresses you map and how you organise the code that fills the bytes in.
 
 ---
 
-## 3. What the hardware does on every access
+## 3. Why it is a tree and not a list
 
-This is the model. Everything else in this document is encoding details.
+The obvious design would be a big lookup table: one entry per address, look up the address, get
+the answer.
 
-Take a 39-bit virtual address and cut it into four fields:
+Count how big that is. Even a modest 39-bit address space is 549,755,813,888 addresses. At 8
+bytes per entry, that table is 4 terabytes. You have 128 megabytes.
+
+So the real design does two things to shrink it.
+
+**First, it works in chunks, not single bytes.** The smallest thing that gets its own entry is
+4096 bytes - a **page**. Every address inside one page gets the same answer, and the low 12 bits
+of the address just ride along unchanged. That divides the table size by 4096 straight away.
+Still 1 GiB. Not enough.
+
+**Second, it splits the lookup into stages.** Instead of one enormous table, you get a small tree
+of small tables, and the address is chopped into pieces that each pick a slot in one of them.
+
+Every table in the tree is the same size and shape: **512 slots, 8 bytes each**. That is 4096
+bytes - exactly one page. That is not a coincidence, it is the point: tables are pages, so the
+allocator that hands out pages is the allocator that hands out tables.
+
+512 slots means it takes 9 bits of the address to pick one, and now every magic number in this
+document falls out of arithmetic you can do yourself:
+
+- The last stage: each slot covers one page. **4 KiB.**
+- One stage up: each slot covers 512 pages. 512 × 4 KiB = **2 MiB.**
+- One stage up again: 512 × 2 MiB = **1 GiB.**
+- One more: 512 × 1 GiB = **512 GiB.**
+
+Each stage up multiplies by 512, because each stage is 9 more bits of address.
+
+---
+
+## 4. What "level 1", "level 2", "level 3" mean
+
+They are just names for those stages. **Level = how deep in the tree, counting down from the
+root.** Level 0 is the outermost table, level 3 is the innermost. That is the whole meaning.
+
+The useful way to hold them is by how much ground one slot covers:
+
+| level | one slot covers | you need this level if... |
+| --- | --- | --- |
+| 0 | 512 GiB | your address space is bigger than 512 GiB |
+| 1 | 1 GiB | your address space is bigger than 1 GiB |
+| 2 | 2 MiB | you want detail finer than 1 GiB |
+| 3 | 4 KiB | you want detail finer than 2 MiB |
+
+**You get to choose where the tree starts.** There is a register that tells the CPU how many bits
+of address you intend to use, and that number decides which level is the root. Everything you
+care about lives below `0x4800_0000`, which is under 2 GiB, so you will ask for a 39-bit address
+space - and with 39 bits the tree starts at **level 1**. Level 0 never exists. You never allocate
+it and you can forget it.
+
+So your tree is at most three levels deep, and the first version is one level deep.
+
+### What a slot can say
+
+Each slot is 8 bytes and says one of three things. This is the mechanism, and it is all of it:
+
+1. **"Nothing here."** The slot is zero. Any address landing here makes the CPU stop and raise a
+   fault. This is the default, and it is why a fresh table must be zeroed.
+
+2. **"Here is the answer for this whole chunk."** The slot holds a physical address and some
+   permission bits. The lookup stops immediately. At level 1 this one slot covers a whole
+   gigabyte; at level 2, 2 MiB; at level 3, 4 KiB. The ARM manual calls the big ones **blocks**
+   and the 4 KiB ones **pages**; they are the same idea at different zoom levels.
+
+3. **"Too coarse - go look over there."** The slot holds the address of *another table*, one level
+   down. The CPU goes and repeats the process there with the next 9 bits of the address.
+
+Option 3 is what makes it a tree. Option 2 is what stops it being enormous: mapping a whole
+gigabyte with one slot is why your entire kernel needs two of them instead of thirty-two
+thousand.
+
+### The walk, step by step
+
+Suppose the MMU is on and your code does `ldr x0, [x1]` with `x1` holding `0x4008_1234`.
+
+The hardware chops that address up:
 
 ```
- 38     30 29     21 20     12 11        0
-┌─────────┬─────────┬─────────┬───────────┐
-│ L1 idx  │ L2 idx  │ L3 idx  │  offset   │
-│ 9 bits  │ 9 bits  │ 9 bits  │  12 bits  │
-└─────────┴─────────┴─────────┴───────────┘
+0x4008_1234
+
+  bits 38..30  →  1        which slot in the level 1 table
+  bits 29..21  →  0        which slot in the level 2 table, if it gets that far
+  bits 20..12  →  0x81     which slot in the level 3 table, if it gets that far
+  bits 11..0   →  0x234    offset inside the final chunk, carried through untouched
 ```
 
 Then:
 
-1. Read `TTBR0_EL1`. That is the physical address of the level 1 table.
-2. Index it with the L1 field. 9 bits, 512 entries, 8 bytes each - so the offset into the table
-   is `idx * 8`, which is why a table is 4096 bytes.
-3. Look at the bottom two bits of the descriptor you found:
-   - `0b00` or `0b10` - **invalid**. Translation fault. Done, badly.
-   - `0b01` - **block**. The walk stops here. This entry maps the whole 1 GiB. Take the output
-     address from the descriptor, glue on the low 30 bits of the VA, done.
-   - `0b11` - **table**. Take the next-level table address out of the descriptor, go to step 4.
-4. Same thing one level down with the L2 field. A block here is 2 MiB.
-5. Same again with the L3 field. At level 3 there are no blocks - `0b11` means a 4 KiB **page**,
-   and `0b01` is invalid. This is a genuine architectural wart and it catches everyone once.
-6. Physical address = the leaf's output address, plus the low bits of the VA that the leaf's
-   size does not cover.
+1. Read the register holding the root table's address. Call it `R`.
+2. Read 8 bytes from `R + 1 × 8`. That is slot 1 of the level 1 table.
+3. If that slot is zero → fault, done.
+   If it says "here is the answer" → the answer is the address in the slot, plus the bottom 30
+   bits of `0x4008_1234`. Done, one memory read.
+   If it says "go look over there" → take the table address out of it and repeat at step 2 with
+   the level 2 slot number.
+4. Same again at level 3 if needed.
+5. Check the permission bits on whatever slot ended the walk. Allowed → the access goes through.
+   Not allowed → fault.
 
-Then it checks the permissions and the memory type from the leaf, and either lets the access
-through or raises an abort. Alongside that it fills a TLB entry so the next access to the same
-page skips steps 1-6 entirely.
-
-The whole tree is nothing more than a 512-way trie keyed on the address, with an early-out at
-every node. That early-out is what makes it practical: a 1 GiB block is one descriptor, and the
-alternative encoding of the same fact is 262144 leaf pages in 512 tables.
-
-### The shape you are building
-
-The address space you care about ends at `0x4800_0000`, which is under 2 GiB. There is no point
-having 48 bits of VA to describe it. Set `TCR_EL1.T0SZ = 25`, giving a 39-bit VA space, and
-with a 4 KiB granule the walk **starts at level 1** - level 0 does not exist and you never
-allocate it.
-
-So the root table is one page, 512 entries, each covering 1 GiB. Two of those 512 entries do
-all the work:
-
-```
-L1[0]  covers 0x0000_0000 .. 0x4000_0000   → all devices      → Device block
-L1[1]  covers 0x4000_0000 .. 0x8000_0000   → all RAM          → Normal block
-L1[2..512]                                  → invalid, i.e. zero
-```
-
-Two descriptors, one 4 KiB allocation, and every address the kernel currently touches is
-identity-mapped with the correct memory type. That is a complete and correct first map, and it
-is milestone A in section 8.
-
-It is also too coarse in one specific way, which is milestone B: entry 1 maps the whole
-gigabyte `0x4000_0000..0x8000_0000` as RAM, but only the first 128 MiB is real. A stray pointer
-to `0x4800_0000` would be translated successfully and go to a hole in the bus instead of
-faulting. Replacing that one block with a table descriptor and 64 × 2 MiB blocks at level 2
-maps exactly the RAM that exists and leaves the rest invalid - and it is the step where you
-actually build a *tree* rather than an array.
-
-### Why not 48-bit VA, or 64 KiB granule
-
-`T0SZ = 16` gives the full 48 bits and adds a level 0 table containing exactly one non-zero
-entry. It is one more allocation and one more indirection to describe nothing. Linux does it
-because Linux needs the address space; you do not.
-
-A 64 KiB granule needs fewer levels but its level 2 block is 512 MiB, which is bigger than your
-RAM. It also makes every published example and every Linux constant not apply. 4 KiB is what
-everything assumes.
-
-`T0SZ = 32` (a 32-bit VA, so a level 1 table with just 4 entries and 32 bytes long) is legal
-and even smaller. Skip it - a truncated root table has its own alignment rule and you would be
-the only person on the internet with one.
+That is it. A load can therefore cost one, two, or three extra memory reads. That would be
+crippling, so the CPU caches the results in something called the **TLB** - Translation Lookaside
+Buffer - and the walk usually does not happen at all. The TLB is not your problem in this skill,
+and it becomes your problem the first time you *change* a table after the MMU is running.
 
 ---
 
-## 4. The descriptor
+## 5. The map you are actually building
 
-64 bits. Here is a leaf - a block or a page - with only the fields that matter at EL1 on this
-machine:
+Here is the machine, checked this session:
 
 ```
- 63  59 58    55 54  53  52 51        47                12 11 10 9 8 7 6 5 4  2 1 0
-┌──────┬────────┬───┬───┬───┬──┬────────────────────────┬──┬──┬───┬───┬─┬─────┬───┐
-│      │  soft  │UXN│PXN│Con│  │     output address     │nG│AF│ SH│ AP│ │Attr │ 01│
-└──────┴────────┴───┴───┴───┴──┴────────────────────────┴──┴──┴───┴───┴─┴─────┴───┘
+0x0000_0000  flash, unused
+0x0800_0000  interrupt controller
+0x0900_0000  the UART                      ← devices
+0x0901_0000  clock, GPIO, virtio
+0x0A00_4000  ...end of devices
+
+0x4000_0000  RAM starts    ┐
+0x4008_0000  your kernel   │
+0x4400_0000  device tree   │ ← RAM
+0x4800_0000  RAM ends      ┘
 ```
 
-Bottom up:
+Every device sits below `0x4000_0000`. All RAM sits above it. The level 1 table's slots are 1 GiB
+each. So:
 
-**bits[1:0] - what this is.** `0b01` block, `0b11` table-or-page, anything even is invalid.
-Getting this wrong at level 3 is the wart from section 3.
+```
+slot 0  covers 0x0000_0000 .. 0x4000_0000   →  all the devices
+slot 1  covers 0x4000_0000 .. 0x8000_0000   →  all the RAM
+slots 2..511                                →  zero, nothing there
+```
 
-**bits[4:2] - AttrIndx.** Which of MAIR_EL1's eight byte-fields describes this memory. Not the
-type itself, an index into a table of types. Section 6.
+**Two slots.** One table, one page, 4096 bytes from your bump allocator, and two of its 512 slots
+are non-zero. That is a complete and correct map of everything this kernel touches.
 
-**bit[5] - NS.** Non-secure. You are already in non-secure state, where it is ignored. Zero.
+Both slots say "the answer is the same address you asked for" - that is what makes it an
+**identity map**, and it is why switching the MMU on will change nothing observable. That is the
+best possible first result: if anything at all changes, you have a bug.
 
-**bits[7:6] - AP[2:1] - permission.**
+### Then make it less coarse
 
-| value | EL1 | EL0 |
+Slot 1 says all of `0x4000_0000..0x8000_0000` is RAM. Only the first 128 MiB actually exists. So a
+stray pointer to `0x5000_0000` would translate fine and go nowhere.
+
+The fix is to turn slot 1 from "here is the answer" into "go look over there", pointing at a
+second table. That table's slots are 2 MiB each, and 128 MiB needs 64 of them. Slots 64 through
+511 stay zero, so anything above `0x4800_0000` faults.
+
+That is the version worth having, and it is where you actually build a *tree*: two tables, a slot
+pointing from one to the other, and two allocations from `Bump`.
+
+---
+
+## 6. What is inside one slot
+
+Eight bytes. Most of the bits are for things you do not have. Here are the ones that matter, and
+section 11 has the rest for when you are writing the code.
+
+**The bottom two bits say which of the three kinds of slot it is.**
+
+| bottom 2 bits | meaning |
+| --- | --- |
+| `00` or `10` | nothing here |
+| `01` | here is the answer (a block, at level 1 or 2) |
+| `11` | at level 1 or 2: go look over there. At level 3: here is the answer. |
+
+Yes, `11` means two different things depending on the level, and at level 3 the value `01` is
+invalid. There is no good reason for this. Everybody trips on it once.
+
+**Bits 47 down to 12 hold the physical address.** The low 12 bits are not stored, because
+everything is at least page-aligned so they are known to be zero. In practice you write
+`address | flags` and the flags live in the space the address does not use. If your address is
+not properly aligned, its low bits land on top of your flags and quietly corrupt them.
+
+**Bit 10 is the Access Flag.** Set it to 1. If it is 0, every single access through this slot
+faults, no exceptions. The feature exists so an operating system can watch which pages are being
+used; you have no such operating system, so a zero here is only ever a bug. This is the most
+common reason a first attempt at page tables does nothing, it costs one bit, and the symptom
+looks exactly like "the MMU is broken".
+
+**Bits 4 to 2 say what kind of memory this is.** Not the kind itself - a number from 0 to 7,
+which is an index into a list of eight kinds held in a separate register. Section 7.
+
+**Bits 7 and 6 are permissions.** Leave them `00`, which means "readable and writable by the
+kernel, no access from user code". Read-only text and the rest are worth doing, and they belong
+after the map is proven to work at all. Do not debug two things at once.
+
+**Bits 54 and 53 say "never execute instructions from here".** Set both on the device slot -
+letting the CPU speculatively fetch instructions out of a UART's FIFO is a real hazard, not a
+theoretical one. On the RAM slot, bit 53 must be 0 or your own code cannot run.
+
+A "go look over there" slot is much simpler: the address of the next table, with `11` in the
+bottom bits, and nothing else set.
+
+---
+
+## 7. Two kinds of memory, and why the UART cares
+
+The CPU treats RAM and devices completely differently, and the slot is where you tell it which
+is which.
+
+**Normal memory** is RAM. The CPU may cache it, reorder accesses to it, and merge two small
+writes into one big one. All of that is fine, because reading RAM twice gives the same answer and
+nobody is watching.
+
+**Device memory** is a UART or an interrupt controller. Every access is a real event. The CPU
+must not cache it, must not reorder it, and must not merge writes.
+
+Consider what each of those would do to your UART if you got it wrong:
+
+- **Caching**: your write to the transmit register lands in a cache line and never reaches the
+  chip. Output stops - but not cleanly. Some of it appears later, out of order, when the cache
+  line is eventually evicted.
+- **Merging**: two byte-sized writes to the data register get merged into one 16-bit write. Two
+  characters become one.
+- **Reordering**: the CPU writes the data register before checking whether the FIFO has room, or
+  hoists the status-register read out of your spin loop and spins forever on a stale value.
+
+That last one is worth stopping on, because it looks like something you already fixed. Your
+`read_volatile` in `mmio.rs` stops the *compiler* from reordering or eliding those accesses. It
+does nothing about the *CPU*, which reorders at runtime. The memory type is what constrains the
+CPU. You need both, and neither substitutes for the other.
+
+The eight possible memory types are defined in a register called **MAIR_EL1** - Memory Attribute
+Indirection Register. It is eight bytes, one per type, and the 3-bit number in a slot picks one.
+Writing that register is the next skill's job, but you have to agree the numbering now, because
+it is baked into the slots you are about to write:
+
+| number | meaning | byte value |
 | --- | --- | --- |
-| `0b00` | read/write | no access |
-| `0b01` | read/write | read/write |
-| `0b10` | read only | no access |
-| `0b11` | read only | read only |
+| 0 | Normal RAM, cached | `0xFF` |
+| 1 | Device | `0x04` |
 
-`0b00` for everything, for now. There is no EL0 until `zheos-gnt`, and read-only text is a
-`zheos-f27` refinement - do not add permissions to a map you have not yet proven translates.
+Put those two constants in your module with a comment, and use `0` for the RAM slot and `1` for
+the device slot.
 
-**bits[9:8] - SH - shareability.** `0b11` inner shareable for Normal memory, which is what
-makes the cache coherent with other cores and with DMA. `0b00` for Device, where it is ignored
-because Device accesses are never cached in the first place. Getting this wrong on Normal
-memory is invisible on one core and a disaster on `zheos-5x5`.
-
-**bit[10] - AF - Access Flag.** Set it to 1. If it is 0, every access through this descriptor
-raises an Access Flag fault, immediately, unconditionally. The hardware's intent is that an OS
-leaves it clear and uses the resulting faults to learn which pages are being used; you have no
-such OS, so a zero here is purely a bug. It is the single most common reason a first page table
-does not work, it costs one bit, and it looks exactly like "the MMU is broken".
-
-**bit[11] - nG - not global.** Zero: this mapping belongs to every address space. Relevant once
-there is more than one.
-
-**bits[47:12] - output address.** The physical address, with the low bits implied zero. For a
-level 3 page that means bits[47:12] and 4 KiB alignment. For a **level 2 block** the low 21
-bits must be zero, and for a **level 1 block** the low 30 bits. The hardware does not mask them
-for you and the architecture calls a non-zero value there reserved. In practice you build the
-descriptor as `pa | flags`, so a misaligned `pa` silently corrupts the flags underneath it.
-
-**bit[52] - Contiguous.** A hint that this and 15 neighbours are one run, so the TLB can hold
-them in one entry. An optimisation. Zero.
-
-**bits[54:53] - UXN and PXN - execute never.** UXN blocks execution at EL0, PXN at EL1. Set
-both on device memory - speculatively fetching instructions from a UART FIFO is a genuine
-hazard, not a theoretical one. On RAM, PXN must be 0 or your kernel cannot run; UXN is 1
-because EL0 does not exist yet.
-
-A **table descriptor** is much simpler: `next_table_physical_address | 0b11`, and the upper
-bits `[63:59]` hold NSTable/APTable/UXNTable/PXNTable, which restrict everything below. Leave
-them zero and permissions are decided entirely at the leaves, which is far easier to reason
-about.
-
-### Two worked values
-
-The two milestone-A descriptors, so you have something to check against.
-
-Device block, level 1, output `0x0000_0000`, AttrIndx 1:
-
-```
-  0b01                  = 0x0000_0000_0000_0001   block
-  AttrIndx = 1  (<<2)   = 0x0000_0000_0000_0004
-  AF = 1       (<<10)   = 0x0000_0000_0000_0400
-  PXN = 1      (<<53)   = 0x0020_0000_0000_0000
-  UXN = 1      (<<54)   = 0x0040_0000_0000_0000
-  output address        = 0x0000_0000_0000_0000
-                        ─────────────────────────
-                          0x0060_0000_0000_0405
-```
-
-Normal block, level 1, output `0x4000_0000`, AttrIndx 0:
-
-```
-  0b01                  = 0x0000_0000_0000_0001   block
-  AttrIndx = 0          = 0x0000_0000_0000_0000
-  SH = 0b11     (<<8)   = 0x0000_0000_0000_0300
-  AF = 1       (<<10)   = 0x0000_0000_0000_0400
-  UXN = 1      (<<54)   = 0x0040_0000_0000_0000
-  output address        = 0x0000_0000_4000_0000
-                        ─────────────────────────
-                          0x0040_0000_4000_0701
-```
-
-Those two numbers are the acceptance criterion of this skill. When `make mem ADDR=<root> N=2
-FMT=xg` prints them, the tables are built. Note the byte order the monitor shows you - `xp
-/2xg` prints them as 64-bit values, so they read the same way round as above.
+One thing to look forward to: right now, with the MMU off, the CPU treats *everything* as device
+memory. That is why unaligned loads fault today - the note in `CLAUDE.md` about ESR `0x21` is
+exactly this. Once the MMU is on and RAM is marked as Normal, unaligned loads start working. That
+is a nice, visible confirmation that the map took effect.
 
 ---
 
-## 5. What Linux does, and what to keep
+## 8. Build it, but do not switch it on
 
-The Linux anchor for this skill is `arch/arm64/mm/mmu.c`, not `mm/`. The relevant function is
-`__create_pgd_mapping()`, which descends `alloc_init_pud` → `alloc_init_pmd` → `alloc_init_cont_pte`,
-allocating each missing table with a callback - and during boot that callback is
-`early_pgtable_alloc()`, which calls `memblock_phys_alloc()`. Linux's page table builder sits
-directly on the allocator you wrote last skill, for exactly the reason you wrote it.
+The acceptance criterion for this skill says the tables exist and are inspectable, MMU still off.
+That is not caution for its own sake.
 
-Its central optimisation is `use_1G_block()` / `pmd_set_huge()`: at each level, if the region
-being mapped is aligned to that level's block size and at least that big, install a block and
-stop descending. Otherwise allocate the next table down. That single rule is what turns "map
-128 MiB" into 64 descriptors instead of 32768, and it is the one piece of the algorithm worth
-copying verbatim.
+With the MMU off you can build a completely wrong table and the machine will not react at all.
+Your UART works, your timer ticks, your shell responds. You can print the table, walk it, compare
+it against numbers you worked out on paper, and fix it, all with a live machine under you.
 
-| Linux arm64 has | you build | why |
+The moment you switch it on, the *next instruction the CPU fetches* goes through the table. If
+that fetch fails, the CPU tries to run the fault handler - and fetching *that* goes through the
+table too, and fails as well. The machine locks up with nothing on the screen and no way in.
+That is not a debugging session, it is a rebuild-and-guess session.
+
+So: build it here, get every number right while you can still see, then flip the switch next
+skill with high confidence.
+
+---
+
+## 9. Steps
+
+**Step 1 - one page, zeroed.** Get 4096 bytes with 4096-byte alignment out of `Bump`, zero all of
+it, print the address. Confirm the bottom twelve bits are zero, then `make mem ADDR=<that> N=8
+FMT=xg` and confirm the monitor sees eight zeros.
+
+Zeroing is not optional and it is not defensive. `Bump::alloc` deliberately does not zero - that
+is written down in `docs/bump.md`. 510 of these slots will never be written by you, and "nothing
+here" is spelled *zero*. Leftover garbage in a slot is the CPU following a random pointer with
+random permissions.
+
+**Step 2 - write the two slots by hand.** No loop, no general function. Work out the two 64-bit
+values from section 6, store them into slot 0 and slot 1, and print them. They should be:
+
+```
+slot 0, devices at 0x0000_0000 :  0x0060_0000_0000_0405
+slot 1, RAM at 0x4000_0000     :  0x0040_0000_4000_0701
+```
+
+Here is where each of those digits comes from, so they do not look magic:
+
+```
+slot 0 - devices                        slot 1 - RAM
+  bottom bits = 01        0x...0001       bottom bits = 01        0x...0001
+  memory type 1  (bit 2)  0x...0004       memory type 0           0x...0000
+  access flag    (bit 10) 0x...0400       shareable    (bits 8,9) 0x...0300
+  no-execute     (bit 53) 0x0020_...      access flag  (bit 10)   0x...0400
+  no-execute     (bit 54) 0x0040_...      no-execute   (bit 54)   0x0040_...
+  address 0x0000_0000                     address 0x4000_0000
+  ─────────────────────────────           ──────────────────────────────
+  0x0060_0000_0000_0405                   0x0040_0000_4000_0701
+```
+
+Then `make mem` on the table address and confirm the two values are really in RAM.
+
+At this point you have a complete, correct identity map of the entire machine, in two slots. It
+is worth having existed even though the next step generalises it away, because every bit in it is
+one you placed yourself.
+
+**Step 3 - walk your own table in software.** Write a function that takes an address and does
+exactly what section 4 describes: pick the slot, look at the bottom two bits, either fault,
+answer, or descend. Return the physical address it would produce.
+
+This is the most valuable thing in the whole skill. It is how "inspectable" gets satisfied with
+the MMU off, and it is the tool you will want at 1am next skill. Check it against four addresses
+you work out on paper:
+
+```
+0x0900_0000  →  0x0900_0000    the UART, via slot 0
+0x4008_0000  →  0x4008_0000    your own code, via slot 1
+0x4400_0000  →  0x4400_0000    the device tree, via slot 1
+0x9000_0000  →  nothing        slot 2 is zero
+```
+
+That last line is the one proving zeroed slots really do mean "nothing here".
+
+One honest limit: this walker shares its slot-picking arithmetic with the code that built the
+table, so if that arithmetic is wrong in both places they will agree with each other. The defence
+against that is the paper arithmetic above, not more code.
+
+**Step 4 - replace the two hand-written stores with a function.** Something that takes a `Region`
+and a memory kind and fills in whatever slots are needed. Run it and get the *same two numbers*
+out. Same hex, different code path. If they move, the loop is wrong, and you have the previous
+values to diff against - which is the entire reason step 2 was its own step.
+
+The rule the function follows is the one every real kernel uses: at each level, if the chunk you
+are mapping is big enough and aligned enough to fit one whole slot at this level, write the
+answer and stop. Otherwise allocate a table one level down and go deeper.
+
+**Step 5 - go one level down for RAM.** Map `board.memory` - the real 128 MiB - instead of a
+rounded-up gigabyte. Slot 1 becomes "go look over there", pointing at a second table with 64
+slots of 2 MiB each.
+
+Three things change, and each is checkable:
+
+- `translate(0x4008_0000)` still gives `0x4008_0000`, now through two levels.
+- `translate(0x4800_0000)` now gives *nothing*, where before it succeeded. That change is the
+  entire point of this step.
+- Slot 1 is now `<address of the second table> | 0x3`. Its bottom two bits are `11`, not `01`.
+
+**Step 6 - print the map.** Loop over the table, skip zero slots, print the address range each
+one covers, where it points, and what kind of memory it is. Ten lines, and it turns "inspectable"
+into output you can paste into a commit message.
+
+Steps 1 to 3 are one sitting. Steps 4 to 6 are another.
+
+### Worth adding while you are here: say why a fault happened
+
+Not required, but it pays for itself the moment you switch the MMU on.
+
+When the CPU refuses an access it raises an exception and fills in the **ESR** - Exception
+Syndrome Register - a number describing what went wrong. `src/exception.rs` already prints it as
+one opaque hex value. For memory faults, the bottom 6 bits are the whole answer:
+
+| bottom 6 bits | meaning |
+| --- | --- |
+| `0x04`-`0x07` | nothing was mapped there |
+| `0x08`-`0x0B` | you left the access flag clear |
+| `0x0C`-`0x0F` | mapped, but not with the permission you wanted |
+| `0x21` | unaligned access |
+
+And within the first three rows, the lowest *two* bits are which level the walk got to. So a
+"nothing mapped" fault at level 1 means the root slot is zero, while the same fault at level 2
+means you descended fine and the leaf is missing. That is the difference between "I never mapped
+it" and "I mapped it into the wrong table", for free.
+
+`FAR_EL1` - Fault Address Register, the address that failed - is already being printed, so with
+those 6 bits you have both halves.
+
+---
+
+## 10. When the numbers come out wrong
+
+| what you see | almost certainly |
+| --- | --- |
+| slot reads `...0404` instead of `...0405` | you built the flags and forgot the bottom two bits. An even-numbered slot means "nothing here". |
+| a slot full of plausible-looking garbage | you did not zero the page. `Bump` does not do it for you. |
+| the table address is not 4096-aligned | you asked `Layout` for a `[u64; 512]`, whose alignment is 8. Ask for 4096 explicitly. |
+| the walker says "nothing there" for an address you mapped | the shift when picking a slot. Level 1 shifts right by 30, level 2 by 21, level 3 by 12. |
+| the walker finds the right chunk but the wrong offset | you added back 12 bits of the original address after a level 1 slot. A 1 GiB slot carries 30 bits through, a 2 MiB slot carries 21. |
+| slot 63 or 511 is set and you never wrote it | you wrote past the end of the table. 512 slots, and the way to make that impossible is section 12. |
+| the mapping function never finishes | each branch has to advance by *its own* chunk size. A branch that descends still advances 2 MiB, not by the whole region. |
+| asked to map 128 MiB, got a whole gigabyte | the "does it fit in one slot at this level" test checked alignment but not length. Both matter. |
+| the machine dies during this skill | you wrote to memory you did not get from `Bump`. Nothing else in this skill touches anything. |
+| a fault with ESR bottom bits `0x21` | unaligned access, MMU still off. Slots are 8 bytes at 8-byte spacing inside a 4096-aligned page, so if you see this, your base address is not what you think. |
+
+The method throughout: compute the number on paper, print it from Rust, read it back with `make
+mem`. Three independent views of the same 8 bytes. If they disagree, the bug is in the few lines
+between them.
+
+Note that this QEMU has no `info tlb` in the monitor for aarch64 - checked this session - so
+there is no oracle to compare against. The paper arithmetic is the oracle.
+
+---
+
+## 11. Reference: the bits, for when you are writing the code
+
+Sections 1 to 10 are the ideas. This is the lookup table.
+
+**A slot holding an answer** (a block at level 1 or 2, a page at level 3):
+
+| bits | name | what to put |
 | --- | --- | --- |
-| 4 levels, 48-bit VA, TTBR1 | 2 levels, 39-bit VA, TTBR0 | Nothing lives above 2 GiB and nothing has moved. |
-| a separate `idmap_pg_dir` | nothing | The idmap exists to keep the few instructions around `msr sctlr_el1` addressable while the world changes underneath them. Your whole map is an identity map, so the problem it solves does not occur. Name this - it is the reason your `zheos-f27` is going to be six instructions. |
-| `swapper_pg_dir` in `.bss` | one `Bump` allocation | Linux needs a root table before memblock is usable. Your `Bump` is already up. |
-| `pgprot_t`: `PAGE_KERNEL`, `PAGE_KERNEL_RO`, `PAGE_KERNEL_EXEC` | `Normal` and `Device` | Permissions are `zheos-f27`. Two memory types is the minimum that is not wrong. |
-| block-or-descend at every level | block-or-descend at every level | The one rule to keep. |
-| `map_mem()` walking every memblock region, honouring `NOMAP` | one `/memory` region | One bank, no NOMAP, as in `docs/bump.md`. |
-| break-before-make when changing a live mapping | nothing | Changing a mapping the TLB already holds needs invalidate-then-write-then-invalidate or the hardware may see both old and new. You are building a map that has never been live. Becomes real the first time you change one after `zheos-f27`. |
-| `dsb ishst` after writing tables | one `dsb` before enabling | Section 10. |
-| contiguous-bit runs, `CONFIG_RODATA_FULL`, KPTI, KASAN shadow | nothing | Each one is a response to a problem you can name and do not have. |
+| 1:0 | kind | `01` for a block, `11` for a level 3 page |
+| 4:2 | AttrIndx | `0` for Normal RAM, `1` for Device |
+| 5 | NS | 0 |
+| 7:6 | AP | `00` - kernel read/write, no user access |
+| 9:8 | SH | `11` for Normal RAM, `00` for Device |
+| 10 | AF | **1**, always |
+| 11 | nG | 0 |
+| 47:12 | address | the physical address; low bits must already be zero |
+| 52 | contiguous | 0 |
+| 53 | PXN | 1 for devices, 0 for RAM |
+| 54 | UXN | 1 |
 
-The rows worth keeping are: the block-or-descend rule, tables allocated from the boot allocator,
-and two memory types. Everything else is deferred with a reason.
+Alignment of the address: a level 1 block needs its low 30 bits zero, a level 2 block its low 21,
+a level 3 page its low 12.
 
----
+**A slot pointing at another table:** `next_table_address | 0b11`. Bits 63:59 can restrict
+everything below; leave them zero so permissions are decided entirely at the leaves.
 
-## 6. MAIR, and why the memory type is not optional
+**Picking a slot from an address:**
 
-A descriptor's AttrIndx is 3 bits, so there are 8 possible memory types, and their definitions
-live in `MAIR_EL1` - eight bytes, byte *n* defining type *n*.
+```
+level 1  →  (address >> 30) & 0x1FF
+level 2  →  (address >> 21) & 0x1FF
+level 3  →  (address >> 12) & 0x1FF
+```
 
-The two you need:
+which is `(address >> (12 + 9 * (3 - level))) & 0x1FF`.
 
-| index | MAIR byte | meaning |
-| --- | --- | --- |
-| 0 | `0xFF` | Normal, inner and outer write-back, read+write allocate, non-transient |
-| 1 | `0x04` | Device-nGnRE |
+That `& 0x1FF` is worth writing even though you can prove it is redundant, because it makes the
+result *structurally* in the range 0..512. If the only way to get a slot number is through this
+function, there is no out-of-range case, so there is no bounds check, no error path to invent for
+something that cannot happen, and no `panic!` in the generated code. `make asm` will show you the
+difference: a masked index emits no compare and no branch. That is how this module keeps your
+no-panic rule without inventing a `Result` for a bug.
 
-so `MAIR_EL1 = 0x0000_0000_0000_04FF`. Writing it is `zheos-f27`'s job, but the indices are
-baked into descriptors you write here, so decide now and put the constants in this module.
-
-`0xFF` is the fully cacheable case: the outer and inner fields are both `0b1111`, meaning
-write-back with both allocate hints. Nothing subtle, just an unmemorable encoding.
-
-`Device-nGnRE` unpacks as **n**on-**G**athering, non-**R**e-ordering, **E**arly write
-acknowledgement. Those three properties are the entire reason this distinction exists, and each
-one of them would break your UART if it were wrong:
-
-- **Gathering** would let the CPU merge two byte writes to `UARTDR` into one halfword write.
-  Two characters become one.
-- **Re-ordering** would let it write `UARTDR` before checking `UARTFR`, or hoist a `UARTFR`
-  read out of your spin loop, which is precisely the hang your `read_volatile` exists to avoid.
-  `volatile` constrains the compiler; the memory type constrains the CPU. You need both.
-- **Early acknowledgement** is the only one that is a relaxation: the write may be signalled
-  complete before it reaches the device. `Device-nGnRnE` (`0x00`) waits for the endpoint. Either
-  works for a PL011; `nGnRE` is what Linux uses for ordinary MMIO and `nGnRnE` is what it uses
-  where it wants the strictest possible ordering.
-
-The failure mode if you map the UART as Normal cacheable is worth predicting before you cause
-it: writes land in a cache line and never reach the device, so output stops - but not
-immediately, and not tidily. Some of it appears when the line is eventually evicted, out of
-order, mixed with a stale read of `UARTFR` that never sees the FIFO drain. It looks like the
-UART broke rather than like the map is wrong.
-
-Conversely, mapping RAM as Device is not a correctness failure, it is a performance one, plus a
-familiar side effect: **Device memory forbids unaligned access**. That is the `ESR` DFSC `0x21`
-already in `CLAUDE.md`. It is the state you are in right now, with the MMU off - all memory
-behaves as Device-nGnRnE. So the moment `zheos-f27` succeeds, unaligned loads start working,
-and that is a usable smoke test that the map really took effect.
-
----
-
-## 7. The shape of it
+**A rough shape for the module**, since you asked for guidance and not code:
 
 ```rust
-pub enum Memory {
-    Normal,
-    Device,
-}
+pub enum Memory { Normal, Device }
 
-pub struct Table {
-    entries: NonNull<u64>,
-}
-
-pub struct Tables {
-    root: Table,
-}
+pub struct Tables { /* the root table's address */ }
 
 impl Tables {
     pub fn build(bump: &mut Bump) -> Option<Tables>;
     pub fn identity_map(&mut self, region: Region, kind: Memory, bump: &mut Bump)
         -> Result<(), MapError>;
     pub fn root(&self) -> usize;
-    pub fn translate(&self, va: usize) -> Option<(usize, u64)>;
+    pub fn translate(&self, va: usize) -> Option<usize>;
 }
 ```
 
-### Notes on each piece
+Three notes on it:
 
-**`identity_map` rather than `map`.** There is no VA parameter because VA equals PA, by
-definition, for every mapping this kernel has. A general `map(va, pa, ...)` is two more
-parameters and one more thing that can disagree. Add it when something actually moves - which
-is a real event, and it is called `zheos-9ka` growing a linear map, or `zheos-f27` deciding to
-run the kernel out of TTBR1.
+`identity_map`, not `map`, because there is no separate "what address should this appear at"
+parameter - it is always the same address. Add that parameter when something actually moves.
 
-Skipped: the VA parameter. Add when a mapping is not an identity.
+`bump` is passed in rather than stored, because the tables only need to allocate while they are
+being built. Storing a `&mut Bump` would lock the allocator away from everyone else for as long
+as the tables exist.
 
-**`Region`, again.** `src/region.rs` already holds `(base, size)` with `end()` and
-`is_overlapping()`. `identity_map(board.memory, Memory::Normal, ..)` reads as the thing it is.
-No new address types.
+Failures are `Option` and `Result`, never a panic. Out of memory is a condition. So is being
+handed a region whose base or size is not a multiple of 4096, which you cannot map. `kmain`
+already has the pattern: print what failed, call `halt()`.
 
-**`bump` passed in, not stored.** `Tables` needs to allocate only while it is being built. A
-stored `&mut Bump` would borrow the allocator for the lifetime of the tables and lock out every
-other user, which is the borrow checker correctly objecting to a design where a long-lived
-struct owns a shared resource. Pass it per call.
-
-**Indices are computed, never passed.** This is the one design decision that carries weight,
-because of your no-panic rule.
-
-```rust
-const fn index(va: usize, level: u8) -> usize {
-    let shift = 12 + 9 * (3 - level as usize);
-    (va >> shift) & 0x1FF
-}
-```
-
-The `& 0x1FF` means the result is structurally in `0..512`. If `Table::set` takes only a value
-produced this way, there is no bounds check to fail, no `Result` to invent for a case that
-cannot happen, and no `panic!` in the emitted code. Compare with a `set(&mut self, i: usize,
-..)` taking a caller-supplied index: now you owe an error path for something that is a bug
-rather than a condition. Design the index out and the question does not arise. `make asm` will
-show you the difference - a masked index emits no compare and no branch to a panic block.
-
-**`Table::new` zeroes.** `bump.alloc(Layout::from_size_align(4096, 4096))` gives you 4096 bytes
-of whatever was there. `write_bytes(ptr, 0, 4096)` immediately, before anything else touches it,
-because 510 of those descriptors are going to stay untouched and they must read as invalid.
-This is the one line whose absence produces the most spectacular failures in `zheos-f27`.
-
-`Layout::from_size_align` returns a `Result`, and `Layout::from_size_align_unchecked` is unsafe.
-Neither is a problem: `?` the `Result` into your `Option`/`Err`, or note that
-`Layout::new::<[u64; 512]>()` gives you size 4096 with alignment 8 - which is *not* enough, so
-you do want the explicit 4096 alignment. That mismatch is worth noticing rather than
-discovering.
-
-**`build` returns `Option`, `identity_map` returns `Result`.** Same split as `Bump`: running out
-of memory is a condition, and a caller asking to map something unmappable is worth naming. The
-`MapError` cases that actually exist:
-
-- out of memory - a table allocation failed
-- the region's base or size is not a multiple of 4096 - you cannot map a fraction of a granule
-- nothing to map - a zero-size region, which is probably a bug upstream
-
-There is no panic anywhere in that list, and `kmain` already has the pattern: print what failed
-and `halt()`.
-
-**`translate` is a test, and it is the deliverable.** Given a VA, walk your own tables the way
-section 3 says the hardware would, and return the PA and the leaf descriptor. Thirty lines. It
-is how you satisfy "inspectable" with the MMU off, it is how you check the map without
-believing your own construction code, and it is the tool you will want at 1am during
-`zheos-f27` when one address in the middle of RAM aborts.
-
-The honest caveat: a walker that shares `index()` with the builder will agree with a wrong
-`index()`. It catches descriptor-format bugs and structure bugs, which is most of them, but not
-a shift that is wrong in both places. The defence against that one is section 9's hand
-arithmetic, not more code.
-
-### The mapping algorithm
-
-Linux's rule, kept whole:
+**What the next skill does with this**, so you know the shape is right:
 
 ```
-map(region, kind):
-  addr = region.base
-  while addr < region.end():
-      remaining = region.end() - addr
-      if addr is 1 GiB aligned and remaining >= 1 GiB and level allows:
-          write a level 1 block; addr += 1 GiB
-      else if addr is 2 MiB aligned and remaining >= 2 MiB:
-          descend to level 2, allocating the table if the L1 entry is empty
-          write a level 2 block; addr += 2 MiB
-      else:
-          descend to level 3, allocating tables as needed
-          write a page; addr += 4 KiB
+MAIR_EL1  = 0x0000_0000_0000_04FF     the two memory types from section 7
+TCR_EL1   = 39-bit address space, 4 KiB pages
+TTBR0_EL1 = tables.root()             Translation Table Base Register
+SCTLR_EL1 |= 1                        System Control Register - the actual switch
 ```
 
-"Descend, allocating if the entry is empty" is the one subtlety: if `L1[i]` is already a
-*block*, you cannot descend through it, and turning it into a table means splitting it into 512
-level 2 entries covering the same range. Linux handles this. Do not - return a `MapError` and
-let the caller not do that. Map devices before RAM, or RAM before devices, in disjoint regions,
-and the case never arises.
-
-For milestone A the whole loop collapses to two iterations of the first branch. For milestone B,
-mapping `board.memory` (128 MiB, 1 GiB-aligned base, but only 128 MiB long) takes branch two 64
-times. Both fall out of the same code, which is why writing the general loop is cheaper than
-writing the special case twice.
+Four registers. `root()` hands back a plain physical address, the map already covers the code
+that will be executing at that instant, and nothing about the tables needs to change. If any of
+those three were false, the design would be wrong now rather than later.
 
 ---
 
-## 8. Bring-up order
-
-Each step prints something before the next one starts. Nothing here turns the MMU on.
-
-**Step 1 - one page, zeroed, from `Bump`.** `Table::new`: allocate 4096/4096, zero it, print the
-address. Check the low twelve bits are zero, then `make mem ADDR=<that> N=8 FMT=xg` and confirm
-eight zeros. You have just used your allocator for its actual customer, and you have proved the
-zeroing works - which nothing so far has.
-
-**Step 2 - the two block descriptors, by hand.** Build the constants from section 4 and write
-them into `L1[0]` and `L1[1]` directly, with no loop and no `identity_map`. Print them. Compare
-against `0x0060_0000_0000_0405` and `0x0040_0000_4000_0701`. Then `make mem` on the root and
-confirm the monitor sees the same two values in RAM.
-
-This is milestone A: a complete, correct identity map of everything this kernel touches, in two
-entries. It is worth having existed even though the next step generalises it away, because
-every number in it is one you computed yourself.
-
-**Step 3 - `translate`.** The walker from section 7. Feed it four addresses and check each
-against what you work out on paper:
-
-```
-0x0900_0000  → 0x0900_0000, via L1[0], Device
-0x4008_0000  → 0x4008_0000, via L1[1], Normal   (your own .text)
-0x4400_0000  → 0x4400_0000, via L1[1], Normal   (the DTB)
-0x9000_0000  → None                             (L1[2] is zero)
-```
-
-That last line is the one that proves invalid entries read as invalid, and it is why zeroing
-mattered.
-
-**Step 4 - the general `identity_map`, still at level 1.** Replace step 2's two hand-written
-stores with two calls, and get the same two descriptors out. Same hex, different code path. If
-the numbers move, the loop is wrong and you have the previous values to diff against - which is
-the entire reason step 2 exists as a separate step.
-
-The device region is a judgement call: `virt`'s devices span `0x0800_0000` to about
-`0x0A00_4000`, so the honest `Region` is not the whole gigabyte. At level 1 you have no choice
-but to round to 1 GiB. Map `Region { 0, 0x4000_0000 }` and note in the code that this is
-level-1 granularity, not a claim about the machine.
-
-**Step 5 - descend to level 2.** Now map `board.memory` - 128 MiB - instead of a hardened
-gigabyte. `L1[1]` becomes a table descriptor pointing at a second allocation; that table gets
-64 block descriptors of 2 MiB each; entries 64..512 stay zero. Then:
-
-- `translate(0x4008_0000)` still gives `0x4008_0000`, now through two levels.
-- `translate(0x4800_0000)` gives `None`, where it used to succeed. That change is the point of
-  the whole step.
-- The root's `L1[1]` is now `<l2 physical> | 0x3`. Check it with `make mem`.
-- `bump.remaining()` has dropped by two pages rather than one.
-
-This is milestone B and it is the deliverable. You now have a tree, a table descriptor, two
-allocations from `Bump`, and a map that describes the machine rather than a rounding of it.
-
-**Step 6 - print the map.** A loop over the root that skips zero entries and prints level, index,
-covered VA range, output address and decoded type. Ten lines, and it turns "inspectable" from a
-promise into output you can paste into a commit message. It is also the thing you will read
-first when `zheos-f27` misbehaves.
-
-Steps 1-3 are one sitting. Steps 4-6 are another.
-
-### Optional step 7: decode the data abort
-
-From `zheos-dmu`'s notes, and it pays for itself the moment `zheos-f27` starts.
-
-Every mistake in this document arrives as a data abort or an instruction abort, and
-`src/exception.rs` currently prints the ESR as one opaque hex number. For EC `0x25` and `0x21`
-the low bits of the ISS are the whole answer:
-
-- **bit 6, WnR** - 1 if a write, 0 if a read.
-- **bits 5:0, DFSC** - the fault status:
-
-| DFSC | meaning |
-| --- | --- |
-| `0b0000LL` (`0x00`-`0x03`) | address size fault at level LL |
-| `0b0001LL` (`0x04`-`0x07`) | **translation fault** - nothing mapped |
-| `0b0010LL` (`0x08`-`0x0B`) | access flag fault - you left bit 10 clear |
-| `0b0011LL` (`0x0C`-`0x0F`) | **permission fault** - mapped, but not like that |
-| `0x21` | alignment fault |
-| `0b0101LL` | external abort on a table walk - your table pointer is garbage |
-
-The low two bits are the level the walk got to, which localises the bug to a table. A
-translation fault at level 1 means the root entry is zero; at level 2 it means you descended
-correctly and the leaf is missing. That is the difference between "I never mapped it" and "I
-mapped it into the wrong table", and it is free.
-
-`FAR_EL1` is already being printed and gives you the address, so with DFSC you have both halves.
-
-### Deliberately not doing here: the exception stack
-
-`zheos-dmu`'s notes also propose splitting `SP_EL0` and `SP_EL1` at this skill so exceptions run
-on their own stack. The mechanism is small - `msr spsel, xzr` so the kernel runs on `SP_EL0`,
-point `SP_EL1` at a second stack, and move the handler from vector slot `0x200` to `0x000`.
-
-Leave it for `zheos-f27`. The whole value of a separate exception stack is that a stack overflow
-faults instead of quietly eating `.bss`, and that requires an *unmapped guard page* below the
-stack - which requires the MMU to be on. Doing it here gets you the machinery with none of the
-protection, and adds a second variable to whatever goes wrong when you flip `SCTLR_EL1.M`.
-
----
-
-## 9. Proving it works
-
-**Every number is checkable by hand, and that is the method.** There is no `info tlb` in this
-QEMU's monitor for aarch64 - checked this session - so there is no oracle. The check is: compute
-the descriptor on paper, print it from Rust, and read it back out of RAM with `make mem`. Three
-independent views of the same 64 bits.
-
-**The two constants.** `0x0060_0000_0000_0405` and `0x0040_0000_4000_0701`. If those appear at
-the root, the encoding is right.
-
-**`make mem` agrees with Rust.** `make mem ADDR=<root> N=4 FMT=xg`. Rust printing what Rust
-wrote proves the pointer arithmetic; the monitor proves the bytes are in RAM at the address you
-are about to put in `TTBR0_EL1`.
-
-**`translate` round-trips the identity.** For every address in the four-line table in step 3,
-`translate(va)` gives back `va`. An identity map is the only kind where the test is this cheap,
-which is another argument for building it first.
-
-**Unmapped means `None`.** `translate(0x9000_0000)` and, after step 5,
-`translate(0x4800_0000)`. A map that never says no is a map where you have not actually looked
-at bit 0.
-
-**The root is 4 KiB aligned.** `root & 0xFFF == 0`. `TTBR0_EL1` ignores the low bits rather than
-complaining, so a misaligned root silently points somewhere else. Print the mask, not an
-assertion - a non-zero value tells you how far off, which usually names the bug.
-
-**The tables do not overlap anything.** They came from `Bump`, so they are inside RAM and
-outside the image and the DTB by construction. Worth printing the two table addresses next to
-`bump::image()` and `dtb.region()` once, because "by construction" is a claim about code you
-wrote last week.
-
-**The second table's address appears in the first table.** After step 5, `L1[1] >> 12 << 12`
-must equal the level 2 table's address, and `L1[1] & 0x3` must be `0x3`. One line, and it is
-the only check that the table descriptor is a table descriptor rather than a block that happens
-to point at a table - the difference is one bit, and both are "valid".
-
-**Nothing changed.** The MMU is off. The shell still echoes, the timer still ticks, `zhemon`
-still works. If anything at all behaves differently after this skill, you wrote outside your
-allocation, and the tables are the least of it.
-
-**One runnable check.** Same as `docs/bump.md`: there is no test harness (`zheos-smj`, still not
-a dependency). A `fn self_check()` over a `Tables` built on a synthetic `Bump` - a fake arena
-with fake regions - runs the whole builder and the whole walker at boot in microseconds and
-prints one line. `Bump::new` takes values, which is what makes this possible, and it is the
-second time that choice has paid.
-
----
-
-## 10. What happens when you turn it on
-
-Not this skill. But the shape of `zheos-f27` decides whether this skill's output is the right
-shape, so it is worth having straight.
-
-```
-MAIR_EL1  = 0x0000_0000_0000_04FF     the two types from section 6
-TCR_EL1   = T0SZ 25, TG0 4 KiB, SH0 inner, IRGN0/ORGN0 write-back,
-            EPD1 = 1 (no TTBR1 walks at all), IPS from ID_AA64MMFR0_EL1
-TTBR0_EL1 = tables.root()
-    isb
-SCTLR_EL1 |= M | C | I
-    isb
-```
-
-Four registers and two barriers. Three things about it:
-
-**The `isb` before is not optional and the `isb` after is the interesting one.** The instruction
-after `msr sctlr_el1` has already been fetched, decoded and possibly speculated, using the old
-regime. `isb` throws that away and re-fetches - through the MMU. That instruction's address is
-the first virtual address the machine ever uses, and it is `pc + 4`, in your `.text`, at
-`0x4008_xxxx`. It resolves because your map is an identity map. This is the whole job of
-Linux's `idmap_pg_dir`, and you got it for free by never moving anything.
-
-**`TCR_EL1.TG0` uses a different encoding from `TG1`.** `00` is 4 KiB for TG0; `10` is 4 KiB for
-TG1. There is no reason for this and it costs people an afternoon.
-
-**A `dsb` before the `msr`,** so the table writes are complete before the walker can be asked to
-read them. With the MMU off your stores are Device memory and effectively already ordered, so
-this is belt-and-braces here - and it stops being belt-and-braces the moment caches are on and
-you edit a live table.
-
-The consequence for this skill: `root()` returns a plain physical `usize`, the map covers the
-code that will be running at that instant, and nothing about the tables needs to change when
-the MMU comes on. If any of those three were false, the design would be wrong now rather than
-later.
-
----
-
-## 11. When nothing happens
-
-The MMU is off through this whole skill, so nothing will crash. That is the good news and it is
-also why the table below is mostly about wrong numbers rather than dead machines - the crashes
-are all deferred to `zheos-f27`, where they will be caused by whatever you get wrong here.
-
-| symptom | almost certainly |
-| --- | --- |
-| descriptor is `...0404` instead of `...0405` | you built the flags and forgot bits[1:0]. An even descriptor is invalid, and invalid is silent until the MMU is on. |
-| descriptor is right but the map does not work in `zheos-f27` | bit 10, AF. It is the default answer. Section 4. |
-| `translate` returns `None` for an address you mapped | the shift in `index()`. Level 1 shifts by 30, level 2 by 21, level 3 by 12. `12 + 9 * (3 - level)`. |
-| `translate` returns the right page but the wrong offset | you glued on 12 bits of VA for a block. A level 1 block keeps 30 bits of offset, a level 2 block 21. |
-| the level 2 table address in `L1[1]` is off by a bit or two | you `or`ed `0b11` into an address whose low bits were not zero, or wrote `pa >> 12` when the descriptor wants `pa` itself in bits[47:12]. |
-| a table full of plausible-looking garbage | `Table::new` did not zero. `Bump::alloc` does not, by design, and `docs/bump.md` section 7 says so. |
-| the root address is not 4 KiB aligned | `Layout::new::<[u64; 512]>()` has alignment 8, not 4096. Section 7. |
-| entry 511 is non-zero and you never wrote it | you wrote past the table. 512 entries, `& 0x1FF`, and the allocation is 4096 bytes not 512. |
-| `identity_map` loops forever | the advance in the loop. Every branch must add its own block size, and the branch that descends still advances by 2 MiB, not by the region size. |
-| `MapError` on a region you believe is fine | `board.memory.size` is `0x0800_0000`, which is 2 MiB aligned; the *device* region is not. Round it or map it at level 1. |
-| mapping RAM appears to succeed but only maps 1 GiB | 128 MiB is not 1 GiB, so the "block at this level" test must check the remaining length as well as the alignment. Checking alignment alone maps a gigabyte when asked for 128 MiB. |
-| the kernel dies during this skill | you wrote to a table pointer you did not get from `Bump`, or to one you got and then overwrote the variable. Nothing else in this skill touches memory. |
-| output goes strange after step 5 | you mapped over the UART, i.e. the device region got `Memory::Normal`. Only observable in `zheos-f27`, so if you see it now, it is not this. |
-| `data abort, DFSC 0x21` | unaligned access, MMU still off, as always. A `u64` store to a table entry needs 8-byte alignment, which a 4 KiB-aligned table plus an 8-byte stride always gives you - so if you see it, the base is not the base. |
-
-The general move is the same as last skill: `make mem` on the root table and read the hex. Two
-descriptors, computed by hand in section 4, sitting at an address you printed. If it does not
-match, the bug is in the few lines between them.
-
----
-
-## 12. Deliberately left out
-
-**Turning it on.** `zheos-f27`. Section 10 is a preview so the interface is right, not an
-instruction.
-
-**Permissions.** Read-only `.text`, non-executable `.data`, a guard page under the stack. All
-require level 3 granularity over the image, all are genuinely worth having, and all belong after
-the map is proven to translate at all. Adding permissions to a map that has never been live
-means debugging two things.
-
-**TTBR1 and a higher-half kernel.** The reason every real kernel lives at `0xFFFF_...` is that
-user space then owns the low half and a context switch swaps one register. There is no user
-space until `zheos-gnt`.
-
-**Splitting a block into a table.** Needed only if you map overlapping regions at different
-granularities. Return a `MapError` instead and map disjoint regions.
-
-**Break-before-make.** The protocol for changing a mapping the TLB may already hold. There is no
-TLB in play while the MMU is off and no live mapping to change. It becomes mandatory the first
-time you edit a table after `zheos-f27`.
-
-**Cache maintenance.** With the MMU off the stores are already reaching memory. One `dsb` at the
-handoff covers it. Real `dc civac` by-VA maintenance becomes a topic when there are two agents
-looking at the same memory, which means `zheos-5x5` or DMA.
-
-**The contiguous bit, and TLB shootdown, and ASIDs.** Optimisation, multiprocessing, and
-multiple address spaces respectively. None exist yet.
-
-**64 KiB and 16 KiB granules, and 48-bit VA.** Section 3.
-
-**Hardware access-flag and dirty-bit management** (`TCR_EL1.HA`/`HD`). Lets the hardware set AF
-for you. You are setting it to 1 permanently, so there is nothing to manage.
-
-**Mapping the PCIe windows at `0x4010_0000_0000`.** Above the 39-bit VA space you chose, so
-mapping them would require the level 0 table you skipped. Nothing uses them.
-
----
-
-## 13. Done when
-
-- One 4 KiB-aligned table comes out of `Bump`, fully zeroed, and `make mem` shows the zeros.
-- `L1[0]` reads `0x0060_0000_0000_0405` and you can name every set bit.
-- After step 5, `L1[1]` is a table descriptor whose address is the level 2 table's and whose low
-  two bits are `0b11`, and the level 2 table holds 64 block descriptors and 448 zeros.
-- `translate` returns `va` for the UART, the image, the stack and the DTB, and `None` for
-  `0x4800_0000` and `0x9000_0000`.
-- The device region is Device-typed and the RAM region is Normal-typed, and the two AttrIndx
-  values match the MAIR you will write in `zheos-f27`.
-- Every address and size in the call comes from `board.memory`, the linker, or the blob. No RAM
-  addresses in `tables.rs`; the device base `0x0` and its 1 GiB length are the only literals, and
-  they are level-1 granularity rather than a claim about the machine.
-- No `panic!`, no `unwrap`, no `assert!` in the module. Out of memory is an `Option`, a bad
-  region is a `MapError`, and the table index cannot be out of range because it is masked.
-- `make lint` is clean, one `self_check` runs at boot, and the shell still works.
-- You can say out loud: what the hardware does between a `ldr` and the bus, why a block
-  descriptor exists, why bit 10 must be 1, why the UART must not be Normal memory, and why an
-  identity map means `zheos-f27` does not need Linux's `idmap_pg_dir`.
-
-The last one is the one that matters.
+## 12. Done when
+
+- One 4096-aligned, fully zeroed page comes out of `Bump`, and `make mem` shows the zeros.
+- Slot 0 reads `0x0060_0000_0000_0405` and you can say what every set bit is doing.
+- After step 5, slot 1 points at a second table, and that table has 64 filled slots and 448 zeros.
+- Your walker returns the same address it was given for the UART, your code, the stack and the
+  device tree, and returns nothing for `0x4800_0000` and `0x9000_0000`.
+- Devices are marked device memory, RAM is marked normal memory.
+- Every address and size comes from `board.memory`, the linker, or the device tree. The only
+  literals are the device region's base and length, and those are rounded to 1 GiB rather than
+  claimed to be exact.
+- No `panic!`, no `unwrap`, no `assert!`. Slot numbers are masked, so out of range does not exist.
+- `make lint` is clean and the shell still works - the MMU is off, so nothing should have changed.
+- You can say out loud: what the hardware does between a `ldr` and the wires, why the tree has
+  levels, why bit 10 must be 1, and why the UART must not be marked as normal memory.
+
+The last one is the one that matters. The others you can check.
 
 ---
 
 ## Optional reading
 
-- **ARM Architecture Reference Manual (ARMv8-A), section D8** - the VMSA. D8.2 is the address
-  translation process and D8.3 is the descriptor formats. It is the only normative source for
-  every bit in section 4, and the tables of "start level for a given T0SZ and granule" are worth
-  finding once and never re-deriving.
-- **`arch/arm64/mm/mmu.c`** in the Linux source. `__create_pgd_mapping`, `alloc_init_pud`,
-  `use_1G_block`. Forty lines carry the whole block-or-descend rule.
-- **`arch/arm64/include/asm/pgtable-hwdef.h`** - Linux's names for every bit in section 4
-  (`PTE_AF`, `PMD_SECT_S`, `PTE_ATTRINDX`). Useful as a second opinion on your own constants.
-- **`arch/arm64/mm/proc.S`**, `__cpu_setup` and the `TCR_EL1` assembly. The seven instructions
-  `zheos-f27` is going to be, with all the `CONFIG_` noise that does not apply to you.
-- **`arch/arm64/kernel/head.S`** - `create_idmap`, and the comment explaining why it exists.
-  Read it to confirm you do not need it.
-- **`hw/arm/virt.c`** and **`target/arm/ptw.c`** in QEMU. The second is the page table walker
-  itself, and it is far more readable than the ARM ARM if you want to check what a specific bit
-  combination actually does.
+None of this is required to do the work.
+
+- **ARM Architecture Reference Manual (ARMv8-A), section D8.** The actual specification for every
+  bit in section 11. Dense, but it is the only authority - there is nowhere else to look.
+- **`target/arm/ptw.c` in the QEMU source.** The table walker, written in C. Far easier to read
+  than the manual if you want to check what a specific bit combination really does, and it is the
+  exact code that will be interpreting your table.
+- **`arch/arm64/mm/mmu.c` in the Linux source**, function `__create_pgd_mapping`. The
+  "big enough and aligned enough → write the answer, otherwise go deeper" rule from step 4, in
+  about forty lines.
+- **`arch/arm64/include/asm/pgtable-hwdef.h`.** Linux's names for the bits - `PTE_AF`,
+  `PTE_ATTRINDX`, `PMD_SECT_S`. Useful as a second opinion on your own constants.

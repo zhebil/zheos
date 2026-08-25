@@ -1,6 +1,6 @@
 import { Doc, Frame, Group, Box, Text, Edges } from "tldx";
 
-const Node = ({ id, label }) => (
+const TableBox = ({ id, label }) => (
   <Box id={id} label={label} color="violet" fill="semi" font="mono" size="s" w="330" h="130" />
 );
 
@@ -25,7 +25,7 @@ export default function Diagram() {
           <Box id="ttbr" label={"TTBR0_EL1\nholds the root table's address"} color="black"
             fill="none" font="mono" size="s" w="400" h="100" />
 
-          <Node id="l1" label={"LEVEL 1 TABLE\n512 slots x 8 B = 4 KiB\none slot covers 1 GiB"} />
+          <TableBox id="l1" label={"LEVEL 1 TABLE\n512 slots x 8 B = 4 KiB\none slot covers 1 GiB"} />
 
           <Group id="l1kids" layout="row" gap="90" align="start">
             <Answer id="s0"
@@ -35,7 +35,7 @@ export default function Diagram() {
               <Box id="s1" label={"slot 1  -  TABLE\n0x4000_0000..0x8000_0000\n\n1 GiB is too coarse\nfor 128 MiB of RAM"}
                 color="blue" fill="semi" font="mono" size="s" w="330" h="185" />
 
-              <Node id="l2" label={"LEVEL 2 TABLE\n512 slots x 8 B = 4 KiB\none slot covers 2 MiB"} />
+              <TableBox id="l2" label={"LEVEL 2 TABLE\n512 slots x 8 B = 4 KiB\none slot covers 2 MiB"} />
 
               <Group id="l2kids" layout="row" gap="90" align="start">
                 <Answer id="s1a"

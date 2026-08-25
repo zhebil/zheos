@@ -61,6 +61,55 @@ impl From<u64> for ESRClass {
     }
 }
 
+/// The top four bits of a fault status code. The bottom two are the level the
+/// table walk had reached, which is why these are compared after a shift.
+mod dfsc {
+    pub const ADDRESS_SIZE: u64 = 0b0000;
+    pub const TRANSLATION: u64 = 0b0001;
+    pub const ACCESS_FLAG: u64 = 0b0010;
+    pub const PERMISSION: u64 = 0b0011;
+
+    /// These carry no level, so they are matched whole.
+    pub const EXTERNAL: u64 = 0x10;
+    pub const ALIGNMENT: u64 = 0x21;
+    pub const TLB_CONFLICT: u64 = 0x30;
+}
+
+/// Bits 5:0 of a data or instruction abort's syndrome - what the MMU objected to.
+/// The four faults that carry a level report which table the walk died in, which
+/// is the difference between "I never mapped it" and "I mapped it in the wrong
+/// table".
+enum FaultStatus {
+    AddressSize(u8),
+    Translation(u8),
+    AccessFlag(u8),
+    Permission(u8),
+    External,
+    Alignment,
+    TlbConflict,
+    Other(u8),
+}
+
+impl FaultStatus {
+    const fn from_syndrome(syndrome: u64) -> Self {
+        let code = syndrome & 0x3F;
+        let level = (code & 0b11) as u8;
+
+        match code >> 2 {
+            dfsc::ADDRESS_SIZE => Self::AddressSize(level),
+            dfsc::TRANSLATION => Self::Translation(level),
+            dfsc::ACCESS_FLAG => Self::AccessFlag(level),
+            dfsc::PERMISSION => Self::Permission(level),
+            _ => match code {
+                dfsc::EXTERNAL => Self::External,
+                dfsc::ALIGNMENT => Self::Alignment,
+                dfsc::TLB_CONFLICT => Self::TlbConflict,
+                other => Self::Other(other as u8),
+            },
+        }
+    }
+}
+
 struct Esr {
     class: ESRClass,
     syndrome: u64,
@@ -124,6 +173,58 @@ pub extern "C" fn handle_exception(
         println!("Exception Syndrome Syndrome: {:#018x}", esr.syndrome);
 
         if esr.class.has_fault_address() {
+            print!("Fault: ");
+            match FaultStatus::from_syndrome(esr.syndrome) {
+                FaultStatus::AddressSize(level) => {
+                    println!(
+                        "address size, level {} - address is outside the range TCR_EL1 was told to translate",
+                        level
+                    );
+                }
+                FaultStatus::Translation(level) => {
+                    println!("translation, level {} - nothing is mapped there", level);
+                }
+                FaultStatus::AccessFlag(level) => {
+                    println!(
+                        "access flag, level {} - mapped, but bit 10 of the descriptor is clear",
+                        level
+                    );
+                }
+                FaultStatus::Permission(level) => {
+                    println!(
+                        "permission, level {} - mapped, but not for this kind of access",
+                        level
+                    );
+                }
+                FaultStatus::External => {
+                    println!("external abort - nothing answered on the bus");
+                }
+                FaultStatus::Alignment => {
+                    println!(
+                        "alignment - unaligned access. With the MMU off every address is Device memory, which forbids it"
+                    );
+                }
+                FaultStatus::TlbConflict => {
+                    println!("TLB conflict - stale entries, a table changed without an invalidate");
+                }
+                FaultStatus::Other(code) => {
+                    println!("unknown status {:#04x}", code);
+                }
+            }
+
+            // Bit 6 is WnR, and it only means anything for a data abort - an
+            // instruction abort is always a fetch.
+            if matches!(esr.class, ESRClass::DataAbortCurrentEL) {
+                println!(
+                    "Access: {}",
+                    if esr.syndrome & (1 << 6) != 0 {
+                        "write"
+                    } else {
+                        "read"
+                    }
+                );
+            }
+
             println!("Fault Address Register: {:#018x}", far_el1);
         }
 

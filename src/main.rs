@@ -13,8 +13,8 @@ use core::{
 use crate::{
     board::{Board, Conduit},
     bump::Bump,
+    mmu::{Table, descriptor::Descriptor},
     region::Region,
-    tables::Table,
     uart::uart,
 };
 
@@ -49,11 +49,11 @@ mod gic;
 mod input;
 mod irq;
 mod mmio;
+mod mmu;
 mod print;
 mod psci;
 mod region;
 mod ring_buffer;
-mod tables;
 mod timer;
 mod uart;
 mod zhemon;
@@ -111,41 +111,33 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         halt();
     };
 
-    match table.identity_map(
-        &mut bump,
-        Region {
-            base: 0,
-            size: 0x4000_0000,
-        },
-        tables::Memory::DeviceBlock,
-    ) {
-        Ok(_) => {
-            println!("mapped devices");
-        }
-        Err(_) => {
-            println!("Failed to map devices");
-        }
+    // Everything below RAM: every device on the machine, in one 1 GiB block.
+    let devices = Region {
+        base: 0,
+        size: board.memory.base,
     };
 
-    match table.identity_map(&mut bump, board.memory, tables::Memory::NormalBlock) {
-        Ok(_) => {
-            println!("mapped memory");
-        }
-        Err(_) => {
-            println!("Failed to map memory");
-        }
-    };
+    // Halting on failure rather than carrying on: a half-built table is worse
+    // than a stop, because the next step turns the MMU on and walks it.
+    if let Err(error) = table.identity_map(&mut bump, devices, Descriptor::DEVICE_BLOCK) {
+        println!("Failed to map devices: {error}");
+        halt();
+    }
 
-    println!("table:  {:#012x}", table.base());
-    println!("remains memory: {}", bump.remaining());
-    table.print_map();
+    if let Err(error) = table.identity_map(&mut bump, board.memory, Descriptor::NORMAL_BLOCK) {
+        println!("Failed to map memory: {error}");
+        halt();
+    }
 
-    println!("0x0900_0000 → {:?}", table.translate(0x0900_0000));
-    println!("0x4008_0000 → {:?}", table.translate(0x4008_0000));
-    println!("0x4400_0000 → {:?}", table.translate(0x4400_0000));
-    println!("0x4800_0000 → {:?}", table.translate(0x4800_0000));
-    println!("0x9000_0000 → {:?}", table.translate(0x9000_0000));
-    println!("sp          → {:?}", table.translate(cpu::stack_pointer()));
+    println!("table: {:#012x}", table.base());
+    println!("remaining memory: {}", bump.remaining());
+
+    println!("0x0900_0000 -> {:?}", table.translate(0x0900_0000));
+    println!("0x4008_0000 -> {:?}", table.translate(0x4008_0000));
+    println!("0x4400_0000 -> {:?}", table.translate(0x4400_0000));
+    println!("0x4800_0000 -> {:?}", table.translate(0x4800_0000));
+    println!("0x9000_0000 -> {:?}", table.translate(0x9000_0000));
+    println!("sp          -> {:?}", table.translate(cpu::stack_pointer()));
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");

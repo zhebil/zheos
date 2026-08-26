@@ -129,6 +129,15 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         halt();
     }
 
+    println!("mair_el1: {:b}", cpu::mmu::read_mair_el1());
+    println!("tcr_el1: {:b}", cpu::mmu::read_tcr_el1());
+    println!("ttbr0_el1: {:b}", cpu::mmu::read_ttbr0_el1());
+    println!("sctlr_el1: {:b}", cpu::mmu::read_sctlr_el1());
+
+    mmu::enable(&mut table);
+
+    println!("sctlr_el1: {:b}", cpu::mmu::read_sctlr_el1());
+
     println!("table: {:#012x}", table.base());
     println!("remaining memory: {}", bump.remaining());
 

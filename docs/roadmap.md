@@ -117,11 +117,11 @@ boundaries all ride on the exception mechanism.
 | Skill | What it really is | What it unlocks |
 |---|---|---|
 | **DTB** | Parse the device tree QEMU leaves a pointer to in `x0` | The machine describes its own RAM instead of you hardcoding `0x40000000`. |
-| **BUMP** | The simplest allocator: a pointer that only moves forward | Memory you can hand out. Enough to build page tables with. |
+| **BUMP** | The simplest allocator: a pointer that only moves forward | Memory you can hand out. Enough to build page tables with. Demoted by FRAMES to what is left of it: the memory map. |
 | **TABLES** | Build aarch64 translation tables | Virtual addresses exist, even if nothing uses them yet. |
 | **MMU ON** | `TTBR0_EL1`, `TCR_EL1`, `MAIR_EL1`, then the M bit | Real memory management. The instruction after the enable is fetched through translation, which makes it the most delicate moment in the project. |
 | **LOCK** | A spin lock that masks interrupts first | One primitive that closes both hazards: your own interrupt handler, and another core. Everything shared after this is protected rather than argued about. |
-| **FRAMES** | A buddy page allocator | The first allocator that gives memory back. `Bump` keeps its memblock job: it allocates FRAMES' own metadata before FRAMES exists. |
+| **FRAMES** | A buddy page allocator | The first allocator that gives memory back. It bootstraps itself, so there is no memblock layer here - what survives of `Bump` is the reserved-region list, which is a data structure and not an allocator. |
 | **SLAB** | Size classes cut out of a page | Small allocations stop wasting 99 percent of a page. This is what `kmalloc` is. |
 | **HEAP** | A `GlobalAlloc` over SLAB | `Box`, `Vec`, `String`, with real freeing underneath. It stops feeling like assembly with extra steps. |
 | **LOCKDOWN** | Per-region permissions and a guard page | `.text` stops being writable and the stack stops being executable. Without it there is no privilege boundary to drop to. |
@@ -129,10 +129,16 @@ boundaries all ride on the exception mechanism.
 Turning the MMU on also quietly removes the alignment restriction that bites while it is off,
 because memory stops being Device memory. Two milestones in one.
 
-The three allocator skills are three layers on purpose, the same three Linux has. A page
-allocator cannot serve 32-byte objects without its metadata exploding, and an object allocator
-cannot find pages on its own. Collapsing them into one allocator that does neither well is the
-shortcut this project is not taking.
+Two allocator layers, not one and not three. One structure cannot do both jobs: buddy metadata is
+proportional to *all* memory, so tracking 32-byte granularity across 128 mebibytes would cost 4
+mebibytes of bookkeeping instead of 32 kibibytes, while slab metadata is proportional only to the
+pages currently cut into objects. The layering is what lets the dense bookkeeping exist only where
+it is needed.
+
+Linux has a third, memblock, and this project does not, because the reasons memblock exists are
+all absent on `virt`: one memory bank rather than several with node affinity, one set of
+reservations known at once rather than arriving in stages, no memory hotplug. FRAMES places its
+own metadata and the bump allocator becomes ten lines inside its constructor.
 
 ## Tier 5 - Civilization
 

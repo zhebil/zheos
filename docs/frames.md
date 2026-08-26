@@ -14,24 +14,77 @@ What makes it worth a guide is not the code, which is short. It is that this is 
 structure in the kernel that has to store its own bookkeeping in the memory it manages, and the
 first that has to solve fragmentation rather than avoid it.
 
-## 2. What `Bump` cannot do, and what it keeps doing
+## 2. What `Bump` was, and what it becomes
 
 `Bump` hands out addresses and can never take one back. That was correct for what it was for, and
 it stops being correct here, because from FRAMES onward memory is recycled: a task exits and its
 stack goes back, a page table is torn down, a `Vec` is dropped.
 
-But `Bump` does not retire. It has one permanent job, and it is the reason early allocators exist
-at all:
+The obvious next question is whether `Bump` stays as a layer underneath FRAMES, the way memblock
+sits under Linux's buddy allocator. It does not, and the reasoning is worth following because it
+is the difference between copying a design and understanding one.
 
-**FRAMES needs a record for every page in the machine before it can hand out its first page.** On
-your 128 mebibyte arena that is 32768 pages, and the array describing them has to be allocated
-from somewhere. Not from FRAMES, which does not exist yet. From `Bump`.
+FRAMES needs a record for every page in the machine before it can hand out its first page. On a
+128 mebibyte arena that is 32768 pages and 32 kibibytes of array, and it has to come from
+somewhere. But it can come from FRAMES itself:
 
-That is exactly Linux's shape. memblock allocates the page metadata, the buddy allocator is built
-on top of it, `memblock_free_all()` hands over everything still free, and memblock then sits
-mostly idle for the rest of the boot. Your `Bump` is memblock, and this skill is the handover.
+```
+page_count = arena.size / 4096
+metadata   = page_count bytes
+place it in the first aligned gap that is neither the image nor the device tree
+mark those pages used
+build the free lists from what is left
+```
 
-## 3. Fragmentation, and which kind this fights
+Ten lines, needing nothing that is not already available. **The bump allocator does not disappear,
+it becomes an unnamed loop inside `Frames::new`.**
+
+So what is `Bump` actually for? Two different things were hiding under one name:
+
+**A bump allocator** - hand out arbitrary memory before the page allocator exists. This kernel has
+exactly one customer for that, the page metadata, and it can serve itself. This half goes away.
+
+**The memory map** - the authoritative record of what physical memory exists and which parts are
+spoken for: the kernel image from the linker, the device tree blob, anything firmware reserved.
+This is not an allocator at all, it is a list, and FRAMES cannot free a single page without it.
+This half stays, and it is `reserve`, `reserved`, and the overlap test that `Bump` already has.
+
+Linux keeps memblock alive after boot on arm64 for the second reason, not the first. `pfn_valid`,
+memory hotplug and kexec all ask it whether a physical address exists, long after
+`memblock_free_all` has given every free page away.
+
+The allocator half is genuinely needed on a real machine and genuinely not here. Linux needs it
+because memory arrives in several banks with node affinity and each node's metadata must come from
+that node; because reservations arrive in stages and the picture is incomplete when the first
+allocation is needed; because memory can be hot-added later. None of that is true on `virt`, where
+there is one memory node and one set of reservations, all known at the top of `kmain`.
+
+## 3. FRAMES goes before the page tables
+
+There is a consequence of this that improves the boot order rather than just simplifying it.
+
+Today `kmain` builds translation tables out of `Bump`:
+
+```
+Bump::discover  ->  Table::new(&mut bump)  ->  identity_map  ->  mmu::enable
+```
+
+Tables allocated from a bump allocator can never be freed. That is invisible now and it is not
+invisible in TWO WORLDS, where every program gets its own address space and tearing one down means
+returning its tables.
+
+`Frames::new` needs the arena, the reservations, and nothing else. No translation, no tables. So
+it can be step one:
+
+```
+Frames::new  ->  Table::new(&mut frames)  ->  identity_map  ->  mmu::enable
+```
+
+A translation table is exactly one 4 kibibyte page, which is order 0, so it is a better fit for
+FRAMES than for `Bump`'s align-up arithmetic. And tables become freeable three skills before
+anything needs them to be.
+
+## 4. Fragmentation, and which kind this fights
 
 Two different problems share the word, and confusing them is why allocator designs look arbitrary.
 
@@ -46,7 +99,7 @@ FRAMES fights external fragmentation and does not care about internal at all, be
 it hands out is a whole number of pages. SLAB, next skill, is the reverse. That is the division of
 labour between them, and it is the reason there are two layers rather than one.
 
-## 4. Reading the names
+## 5. Reading the names
 
 **PFN**, **P**age **F**rame **N**umber - a page's index, not its address. Page frame number `n`
 starts at `arena_base + n * 4096`. Every piece of arithmetic in this skill is easier in page frame
@@ -68,7 +121,10 @@ whatever `Bump` reserved.
 **Granule** - the page size the translation tables use, fixed by `TG0` in `TCR_EL1` at 4 kibibytes.
 Same word ARM uses for the exclusive monitor's region in LOCK, unrelated meaning.
 
-## 5. The buddy algorithm
+## 6. The buddy algorithm
+
+The split and the merge are drawn in [`diagrams/frames.tldx.jsx`](diagrams/frames.tldx.jsx) - open
+it with `tldx serve docs/diagrams/frames.tldx.jsx` and read it alongside this section.
 
 Keep one free list per order. Eleven lists, orders 0 through 10.
 
@@ -97,14 +153,14 @@ Merge only if **both** hold:
 The second condition is not optional and is the one that gets skipped. If the buddy was itself
 split into smaller pieces, it is not a free block of order `n`, it is a region containing some
 free and some used pages, and merging with it would hand out memory that is in use. Both facts
-have to be readable from the metadata, which is what section 7 is about.
+have to be readable from the metadata, which is what section 8 is about.
 
 After a merge, the combined block is order `n + 1` at the lower of the two addresses, and you try
 again at the next order up. The loop stops when the buddy is unavailable or you reach order 10.
 
 Sixteen lines, no search, no sorted list, no scan. That is the whole allocator.
 
-## 6. The numbers, and where each comes from
+## 7. The numbers, and where each comes from
 
 **Page size 4096.** From `TG0` in `TCR_EL1`, which `src/mmu/init.rs:33` sets to `0b00`. Not a
 choice you make here.
@@ -136,26 +192,30 @@ more than the byte count.
 definition unused memory. Eleven list heads is 88 bytes; the links live inside the free pages. The
 same trick SLAB uses next skill, met here first.
 
-## 7. Where the metadata lives, and the order it appears in
+## 8. Bringing it up, in order
 
-The chicken-and-egg has a fixed resolution:
+The bootstrap has a fixed sequence and every step exists for a reason:
 
-1. `Bump::discover` already gave you the arena and the reservations. Nothing new.
-2. Ask `Bump` for `page_count` bytes, page-aligned. This is `Bump`'s last significant job.
-3. Mark every page in that array as used, because nothing is free until you say so. Starting from
-   "everything used" and freeing what is available is safer than the reverse, and it is what
-   Linux does.
-4. **Reserve the metadata array itself.** It came out of `Bump`, inside the arena, and if you do
-   not mark it used, FRAMES will hand out the pages holding its own bookkeeping. This is the step
-   that gets forgotten, and the symptom is memory that corrupts itself only under pressure.
-5. Free every page that is neither reserved nor part of the image, the device tree, or the
-   metadata. This is `memblock_free_all()`.
+1. **Collect the reservations.** The kernel image from the linker symbols, the device tree blob
+   from wherever it landed. Both are already available at the top of `kmain`.
+2. **Compute the metadata size** from the arena the device tree reported. `arena.size / 4096`
+   bytes, rounded up to a page.
+3. **Find a home for it.** Walk the arena from the base, skipping any reserved region, and take
+   the first page-aligned gap large enough. This is the ten lines from section 2, and it is the
+   only bump-allocation this kernel will ever do.
+4. **Mark every page used.** Nothing is free until you say so. Starting from "everything used" and
+   freeing what is available is safer than the reverse, and it is what Linux does.
+5. **Reserve the metadata array itself.** It sits inside the arena, and if you do not mark it used,
+   FRAMES will hand out the pages holding its own bookkeeping. This is the step that gets
+   forgotten, and the symptom is memory that corrupts itself only under pressure.
+6. **Free every page that is not reserved.** This is `memblock_free_all`, and it is more
+   interesting than it sounds.
 
-Step 5 is more interesting than it sounds, and it is where your real numbers show up.
+Step 6 is where your real numbers show up.
 
 You cannot just push every free page onto list 0 - that would leave the arena as 32000 order-0
 blocks with no large blocks at all, and the merging would have to discover all the structure
-afterwards. Instead, walk the free range and greedily take the largest aligned block that fits,
+afterwards. Instead, walk each free range and greedily take the largest aligned block that fits,
 which is capped by three things: the maximum order, the pages remaining, and the alignment of the
 current page frame number. That last one is `pfn.trailing_zeros()`.
 
@@ -180,24 +240,40 @@ The staircase at the start is not a bug, it is the alignment telling you the tru
 decomposition once during bring-up and you will never wonder whether the allocator understood its
 own arena.
 
-The device tree blob is a second reserved range in the middle, and it will punch a similar hole
-wherever it landed. Measure it rather than assuming - `Bump` already knows where it is.
+The device tree blob is a second reserved range and will punch a similar hole wherever it landed,
+plus the metadata array itself is a third. Measure them rather than assuming.
 
-## 8. What you are building
+## 9. What you are building
 
-One module, `src/frames.rs`.
+One new module, `src/frames.rs`, and a refactor of `src/bump.rs`.
+
+**New in `frames.rs`:**
 
 - A per-page metadata type small enough to be one byte, holding a free flag and an order. Whether
   that is a packed `u8` or a small enum is a real choice: a struct with two fields is clearer and
   the compiler will not pack it for you, and 32 kibibytes against 64 is not worth obscurity.
 - `Frames` holding the arena `Region`, a `NonNull` to the metadata array, the page count, and the
   eleven list heads.
-- `Frames::new(bump: &mut Bump, arena: Region) -> Option<Frames>` - allocate the array, mark
-  everything used, reserve the array's own pages.
-- `add_free_region(&mut self, region: Region)` - the greedy decomposition from section 7. Called
-  once per free range at bring-up, and it is what turns a `Bump` into a page allocator.
+- `Frames::new(arena: Region, reserved: &[Region]) -> Option<Frames>` - the whole bootstrap from
+  section 8, in one call, taking no allocator.
 - `alloc(&mut self, order: usize) -> Option<Pfn>` and `free(&mut self, pfn: Pfn, order: usize)`.
 - `free_pages(&self) -> usize`, because you cannot test any of this without it.
+
+**Changed in `bump.rs`:** the pointer-that-goes-up is now ten lines inside `Frames::new`, so what
+is left of `Bump` is the memory map from section 2 - the reserved list, `reserve`, and the overlap
+test. Whether that keeps the name `Bump`, becomes a `MemoryMap`, or gets folded into `frames.rs`
+as a private helper is a naming decision, and the honest test is whether anything outside FRAMES
+still calls it. Nothing should.
+
+Note the signature: **`Frames::new` takes `Region` and a slice of `Region`, not a `&Dtb`.**
+`Bump::discover` today reaches into the device tree parser to find the blob's own extent, which is
+the memory layer calling sideways into board discovery. Collecting the reservations belongs to
+whoever already knows the machine. FRAMES then depends on `Region` and nothing else, which is
+what makes it testable with a synthetic arena and no device tree at all.
+
+**Also changed in `main.rs`:** the reordering from section 3, and `Table::new` and `identity_map`
+now take `&mut Frames` instead of `&mut Bump`. Their bodies need one page at a time, which is
+order 0, so the change is at the call sites rather than in the walking logic.
 
 Two shapes worth deciding deliberately rather than by accident:
 
@@ -214,7 +290,16 @@ in the kernel where a data structure lives in the memory it manages, and it need
 Do not wrap this in a lock. LOCK is done, and `Frames` is a plain `&mut self` type; whoever owns
 it decides. That keeps it testable on the host and keeps the locking decision in one place.
 
-## 9. Testing it, starting with the tests
+**Where this sits in the architecture:** [`diagrams/architecture.tldx.jsx`](diagrams/architecture.tldx.jsx)
+has the layers. FRAMES joins the same one `Bump` and `mmu` are in already, and that
+layer touches nothing beneath it. `Frames` never reads a device register and never executes an
+`msr`; it does arithmetic on `Region`s it was handed. The only part of memory management that
+reaches down to the architecture layer is `mmu/init.rs`, for four system registers. Moving the
+bootstrap into FRAMES changes nothing about that, because `Bump` never talked to hardware either -
+it read linker symbols, which are compile-time constants, and a `&Dtb` that somebody else had
+already parsed.
+
+## 10. Testing it, starting with the tests
 
 Everything in this skill is host-testable, and the tests are unusually good ones, because the
 allocator has an invariant that is easy to state and easy to check exhaustively.
@@ -224,7 +309,7 @@ leaked.
 
 - An arena added as one aligned power-of-two region shows exactly one block at that order and
   nothing at any other.
-- The staircase: a region that is not aligned decomposes into the orders section 7 predicts. Assert
+- The staircase: a region that is not aligned decomposes into the orders section 8 predicts. Assert
   the exact list, not just the total.
 - Allocating order 0 from an arena that has only a large block splits all the way down, and the
   free counts at each order are what splitting predicts.
@@ -242,22 +327,22 @@ The scrambled free-and-recombine test is worth writing before the merge code, be
 test that tells you the merge is right, and writing it first stops you from writing a merge that
 only handles the order it was debugged against.
 
-## 10. When nothing happens
+## 11. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
 | the arena decomposes into thousands of order-0 blocks | the greedy loop is not capping by alignment. The cap is the minimum of the maximum order, the pages left, and `pfn.trailing_zeros()`. |
-| everything works until memory is exhausted, then random corruption | the metadata array is not reserved. Section 7, step 4. It is allocated from `Bump` inside the arena and it looks free unless you say otherwise. |
+| everything works until memory is exhausted, then random corruption | the metadata array is not reserved. Section 8, step 5. It is allocated from `Bump` inside the arena and it looks free unless you say otherwise. |
 | freeing everything does not return one big block | the merge is not looping. Merging is repeated at each order, not done once. |
 | freeing merges two blocks that are not buddies | using `pfn - (1 << order)` or a sign trick instead of exclusive-or, which is only correct for the upper half of a pair. |
 | freeing merges a block with one that is in use | the same-order check is missing. Free is necessary, same-order is not optional. Section 5. |
 | a block comes back at the wrong address after a merge | the merged block starts at the **lower** of the two page frame numbers, which is `pfn & !(1 << order)`, not whichever one was passed in. |
-| `alloc` returns a page inside the kernel image | step 5 freed a range it should not have. The image reservation is in `Bump`, and the free walk has to respect it. |
-| an address is off by exactly the arena base | a page frame number used as an address, or the reverse. This is the bug the newtype in section 8 exists to prevent. |
+| `alloc` returns a page inside the kernel image | step 6 freed a range it should not have. The image reservation is in `Bump`, and the free walk has to respect it. |
+| an address is off by exactly the arena base | a page frame number used as an address, or the reverse. This is the bug the newtype in section 9 exists to prevent. |
 | a data abort reading a free list link | the link was written before the memory management unit mapped that page, or into a page that is not in the arena. Every free page is inside `board.memory`, which `identity_map` covered. |
 | the count is right and the addresses repeat | a block was pushed onto two lists, usually by splitting and forgetting to remove the parent from its own list before splitting it. |
 
-## 11. How you will know it worked
+## 12. How you will know it worked
 
 Print the decomposition at bring-up: the count of free blocks at each order, and the total free
 memory in bytes.
@@ -267,7 +352,7 @@ Three things in that output prove it worked, and they are checkable by hand:
 - The total free bytes equals the arena size minus the image, minus the device tree, minus the
   metadata array. Every one of those four numbers is already printed by `kmain` today, so this is
   arithmetic you can do in your head against the boot log you already have.
-- The low orders match the staircase in section 7. Seeing exactly one order-7 block, then a 4, 5,
+- The low orders match the staircase in section 8. Seeing exactly one order-7 block, then a 4, 5,
   6, 8, 9 run, is the allocator telling you it understood its own arena's alignment.
 - Allocate one order-10 block, print the free counts, free it, print again, and the two match
   exactly. That single round trip exercises split, merge and the list bookkeeping in one line of
@@ -284,7 +369,8 @@ it never was for `Bump`, because everything above FRAMES will lean on it.
 - `mm/page_alloc.c` in the Linux source. `__free_one_page` is the merge, and it is worth reading
   once precisely because it is recognisably the sixteen lines from section 5 buried in thirty
   years of policy.
-- `mm/memblock.c`, `memblock_free_all`, for the handover in section 7.
+- `mm/memblock.c`, `memblock_free_all`, for step 6 of section 8, and `memblock_alloc` for the
+  half of memblock this kernel does not need.
 - Knuth, The Art of Computer Programming, volume 1, section 2.5, where the buddy system was first
   written down.
 - `include/linux/mmzone.h` for `free_area` and the per-order lists, which is the same eleven lists

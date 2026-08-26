@@ -120,18 +120,29 @@ boundaries all ride on the exception mechanism.
 | **BUMP** | The simplest allocator: a pointer that only moves forward | Memory you can hand out. Enough to build page tables with. |
 | **TABLES** | Build aarch64 translation tables | Virtual addresses exist, even if nothing uses them yet. |
 | **MMU ON** | `TTBR0_EL1`, `TCR_EL1`, `MAIR_EL1`, then the M bit | Real memory management. The instruction after the enable is fetched through translation, which makes it the most delicate moment in the project. |
-| **HEAP** | A `GlobalAlloc` so `extern crate alloc` works | `Box`, `Vec`, `String`. It stops feeling like assembly with extra steps. |
+| **LOCK** | A spin lock that masks interrupts first | One primitive that closes both hazards: your own interrupt handler, and another core. Everything shared after this is protected rather than argued about. |
+| **FRAMES** | A buddy page allocator | The first allocator that gives memory back. `Bump` keeps its memblock job: it allocates FRAMES' own metadata before FRAMES exists. |
+| **SLAB** | Size classes cut out of a page | Small allocations stop wasting 99 percent of a page. This is what `kmalloc` is. |
+| **HEAP** | A `GlobalAlloc` over SLAB | `Box`, `Vec`, `String`, with real freeing underneath. It stops feeling like assembly with extra steps. |
+| **LOCKDOWN** | Per-region permissions and a guard page | `.text` stops being writable and the stack stops being executable. Without it there is no privilege boundary to drop to. |
 
 Turning the MMU on also quietly removes the alignment restriction that bites while it is off,
 because memory stops being Device memory. Two milestones in one.
+
+The three allocator skills are three layers on purpose, the same three Linux has. A page
+allocator cannot serve 32-byte objects without its metadata exploding, and an object allocator
+cannot find pages on its own. Collapsing them into one allocator that does neither well is the
+shortcut this project is not taking.
 
 ## Tier 5 - Civilization
 
 | Skill | What it really is | What it unlocks |
 |---|---|---|
+| **MANY CORES** | Wake the other processors with PSCI | Four cores instead of one. Every `unsafe impl Sync` argument has to be true rather than plausible, which is why LOCK is built first. |
 | **SWITCH** | Save one context, restore another, return into different code | Two things can take turns. Assembly, unavoidably. |
-| **SCHED** | A task table and a timer handler that picks the next one | Preemption: tasks are switched without ever agreeing to it. |
-| **MANY HANDS** | Both together | More than one thing running. The first structure that genuinely deserves the word kernel. |
+| **SCHED** | A task table and a timer handler that picks the next one | Preemption: tasks are switched without ever agreeing to it. Written multi-core from the start, because a single-core scheduler is a different design and not a smaller one. |
+| **TWO WORLDS** | Drop to EL0 and add syscalls | A privilege boundary. The moment this stops being a program and becomes an operating system. |
+| **MANY HANDS** | All of it together | More than one thing running. The first structure that genuinely deserves the word kernel. |
 
 Deliberately last. Everything below it is a prerequisite, and attempting it early is the
 classic way to build something that half works and cannot be debugged.
@@ -146,8 +157,10 @@ line does not.
 | **TIMEKEEPER** | LANGUAGE | A second device, deliberately easy. Proves the driver pattern transfers to a chip you have never seen, from its manual alone. |
 | **HANDS** | SIGNAL | The PL061 GPIO controller, the closest thing here to Ben's 6522 parallel port. |
 | **STORAGE** | TERRITORY | virtio-mmio and a real disk. The first device that is not just registers: it needs shared memory rings. |
-| **MANY CORES** | REFLEX | Wake the other CPUs with PSCI. Instantly every shared thing needs a lock, including the UART. |
-| **TWO WORLDS** | REFLEX | Drop to EL0 and add syscalls. The moment there is a privilege boundary, this stops being a program and becomes an operating system. |
+
+MANY CORES and TWO WORLDS used to live here. They moved onto the main line, because neither is
+optional once the goal is a small Linux rather than a demonstration: cores decide the shape of
+the scheduler, and a privilege boundary is the thing that makes it an operating system.
 
 ## Where things stand
 

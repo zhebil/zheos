@@ -179,9 +179,9 @@ Use the `find-docs` skill rather than recalling API details from memory.
 
 ## Note on the block below
 
-`bd init` generated it and rewrites it, so do not edit inside the markers. One thing it gets
-wrong here: **this repo has no git remote.** Ignore its `git push` / `bd dolt push` steps -
-committing locally is the end of the workflow.
+`bd init` generated it and rewrites it, so do not edit inside the markers. Two corrections: there
+**is** a git remote now (`origin`, on the `github.com-personal` host alias), so `git push` applies;
+there is no Dolt remote, so ignore `bd dolt push`.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker

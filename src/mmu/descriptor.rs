@@ -18,6 +18,7 @@ mod bits {
     pub const ADDRESS: u64 = 0x0000_FFFF_FFFF_F000;
 }
 
+#[cfg_attr(test, derive(PartialEq, Debug))]
 #[derive(Clone, Copy)]
 pub struct Descriptor {
     pub kind: Kind,
@@ -95,6 +96,7 @@ impl Descriptor {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Debug))]
 #[derive(Clone, Copy)]
 pub enum Kind {
     /// Bits `00` and `10`. Not an error - it is how a slot says nothing is mapped.
@@ -134,6 +136,7 @@ impl Kind {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Debug))]
 /// Which of the eight memory types in MAIR_EL1 applies.
 #[derive(Clone, Copy)]
 pub enum AttrIndex {
@@ -160,6 +163,7 @@ impl AttrIndex {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Debug))]
 /// AP\[2:1]. Note that execute permission is not in here - that is PXN and UXN.
 #[derive(Clone, Copy)]
 pub enum AccessPermissions {
@@ -185,6 +189,7 @@ impl AccessPermissions {
     }
 }
 
+#[cfg_attr(test, derive(PartialEq, Debug))]
 /// Ignored for Device memory, which is never cached in the first place.
 #[derive(Clone, Copy)]
 pub enum SH {
@@ -206,5 +211,185 @@ impl SH {
 
     const fn to_u64(self) -> u64 {
         self as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ADDRESSES: [u64; 4] = [
+        0,
+        0x0000_0000_4020_1000,
+        0x0000_00FF_0000_0000,
+        0x0000_FFFF_FFFF_F000,
+    ];
+
+    #[test]
+    fn roundtrip() {
+        for kind in 0..4u64 {
+            for attr in 0..8u64 {
+                for ap in 0..4u64 {
+                    for sh in 0..4u64 {
+                        for flags in 0..64u64 {
+                            for address in ADDRESSES {
+                                let word = kind
+                                    | attr << bits::ATTR_INDEX
+                                    | ap << bits::AP
+                                    | sh << bits::SH
+                                    | (flags & 1) << bits::NS
+                                    | (flags >> 1 & 1) << bits::AF
+                                    | (flags >> 2 & 1) << bits::NG
+                                    | (flags >> 3 & 1) << bits::CONTIGUOUS
+                                    | (flags >> 4 & 1) << bits::PXN
+                                    | (flags >> 5 & 1) << bits::UXN
+                                    | address;
+                                let desc = Descriptor::from_u64(word);
+
+                                assert_eq!(
+                                    Descriptor::from_u64(desc.to_u64()),
+                                    desc,
+                                    "word {:#x}",
+                                    word
+                                );
+
+                                if kind != 0b10 {
+                                    assert_eq!(desc.to_u64(), word, "word {:#x}", word);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bits_positions() {
+        // Kind
+        assert_eq!(
+            Descriptor {
+                kind: Kind::Block,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            0b01,
+            "Block kind"
+        );
+        assert_eq!(
+            Descriptor {
+                kind: Kind::Table,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            0b11,
+            "Table kind"
+        );
+
+        assert_eq!(
+            Descriptor {
+                attr_idx: AttrIndex::Other(0b101),
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            0b101 << 2,
+            "AttrIndex"
+        );
+
+        assert_eq!(
+            Descriptor {
+                ns: true,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            1 << 5,
+            "NS"
+        );
+
+        assert_eq!(
+            Descriptor {
+                ap: AccessPermissions::AllReadOnly,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            0b11 << 6,
+            "AP"
+        );
+
+        assert_eq!(
+            Descriptor {
+                sh: SH::InnerShareable,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            0b11 << 8,
+            "SH"
+        );
+
+        assert_eq!(
+            Descriptor {
+                af: true,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            1 << 10,
+            "AF"
+        );
+        assert_eq!(
+            Descriptor {
+                ng: true,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            1 << 11,
+            "NG"
+        );
+        assert_eq!(
+            Descriptor {
+                contig: true,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            1 << 52,
+            "CONTIGUOUS"
+        );
+        assert_eq!(
+            Descriptor {
+                pxn: true,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            1 << 53,
+            "PXN"
+        );
+        assert_eq!(
+            Descriptor {
+                uxn: true,
+                ..Descriptor::ZERO
+            }
+            .to_u64(),
+            1 << 54,
+            "UXN"
+        );
+
+        for a in ADDRESSES {
+            assert_eq!(
+                Descriptor {
+                    address: a as usize,
+                    ..Descriptor::ZERO
+                }
+                .to_u64(),
+                a,
+                "address {:#x}",
+                a
+            );
+        }
+    }
+
+    #[test]
+    fn kind_from_level() {
+        assert_eq!(Kind::from_level(Level::Level1), Kind::Block);
+        assert_eq!(Kind::from_level(Level::Level2), Kind::Block);
+        assert_eq!(Kind::from_level(Level::Level3), Kind::Table);
     }
 }

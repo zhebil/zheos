@@ -74,6 +74,14 @@ asm: kernel.elf
 	$(BIN)/llvm-objdump -d -S --no-show-raw-insn $< > kernel.asm
 	@echo "wrote kernel.asm ($$(grep -c . kernel.asm) lines)"
 
+# Unit tests for the logic that has no hardware in it. Built for the host, not
+# the bare-metal target, which has no libtest at all. The no_std/no_main/asm
+# items are behind cfg(not(test)) so the same crate compiles both ways.
+HOST := aarch64-apple-darwin
+
+test:
+	cargo test --target $(HOST)
+
 # What the pre-commit hook runs. -D warnings makes every lint fatal. No
 # --all-targets: the test target wants libtest, which aarch64-unknown-none has not.
 lint:
@@ -101,4 +109,4 @@ clean:
 	cargo clean
 	rm -f kernel.elf kernel.bin kernel.asm virt.dtb
 
-.PHONY: kernel.elf virt.dtb run debug regs mem test-bss feed dis asm lint sections syms trace kill clean
+.PHONY: kernel.elf virt.dtb run debug regs mem test test-bss feed dis asm lint sections syms trace kill clean

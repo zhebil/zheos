@@ -1,14 +1,7 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
 
-use core::{
-    arch::global_asm,
-    fmt::Write,
-    num::NonZeroU32,
-    panic::PanicInfo,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
@@ -18,12 +11,18 @@ use crate::{
     uart::uart,
 };
 
-global_asm!(include_str!("kernel.s"));
+#[cfg(not(test))]
+core::arch::global_asm!(include_str!("kernel.s"));
 
-static ALREADY_PANICKED: AtomicBool = AtomicBool::new(false);
+#[cfg(not(test))]
+static ALREADY_PANICKED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
+#[cfg(not(test))]
 #[panic_handler]
-fn panic_handler(info: &PanicInfo) -> ! {
+fn panic_handler(info: &core::panic::PanicInfo) -> ! {
+    use core::{fmt::Write, sync::atomic::Ordering};
+
     let ap = ALREADY_PANICKED.load(Ordering::Relaxed);
     if !ap {
         ALREADY_PANICKED.store(true, Ordering::Relaxed);

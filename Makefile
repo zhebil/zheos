@@ -82,10 +82,11 @@ HOST := aarch64-apple-darwin
 test:
 	cargo test --target $(HOST)
 
-# What the pre-commit hook runs. -D warnings makes every lint fatal. No
-# --all-targets: the test target wants libtest, which aarch64-unknown-none has not.
+# What the pre-commit hook runs. -D warnings makes every lint fatal. The test
+# code is linted on the host, because aarch64-unknown-none has no libtest.
 lint:
 	cargo clippy --release -- -D warnings
+	cargo clippy --target $(HOST) --all-targets -- -D warnings
 	cargo fmt --check
 
 sections: kernel.elf

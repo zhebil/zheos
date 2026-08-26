@@ -50,5 +50,8 @@
     "rodata",
     "strb",
     "wozmon"
-  ]
+  ],
+  "[markdown]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
 }

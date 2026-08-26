@@ -41,7 +41,7 @@ impl Bump {
         Ok(bump)
     }
 
-    fn new(memory: Region) -> Self {
+    pub(crate) fn new(memory: Region) -> Self {
         Self {
             next: memory.base,
             end: memory.base + memory.size,

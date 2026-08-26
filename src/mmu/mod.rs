@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub mod descriptor;
+mod init;
 pub mod level;
 
 const SLOTS: usize = 512;
@@ -195,4 +196,8 @@ impl Table {
             },
         }
     }
+}
+
+pub fn enable(table: &mut Table) {
+    init::init(table);
 }

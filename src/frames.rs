@@ -50,7 +50,7 @@ impl Frames {
             free_pages: 0,
         };
 
-        // frames.seed(&reservations);
+        frames.seed(&reservations);
 
         Some(frames)
     }
@@ -58,12 +58,47 @@ impl Frames {
     pub fn metadata(&self) -> Region {
         self.metadata
     }
+
+    fn seed(&mut self, reservations: &Reservations) {
+        for run in reservations.free_runs() {}
+    }
+
+    fn push(&mut self, pfn: Pfn, order: usize) -> Option<()> {
+        let head = self.free_lists.get_mut(order)?;
+        let current = *head;
+
+        unsafe { pfn.write_next(current) };
+
+        *head = Some(pfn);
+
+        self.write_entry(
+            pfn,
+            MetadataEntry {
+                free: true,
+                order: order as u8,
+            },
+        );
+
+        self.free_pages += 1 << order;
+
+        Some(())
+    }
+
+    fn write_entry(&mut self, pfn: Pfn, entry: MetadataEntry) {
+        unsafe {
+            (self.metadata.base as *mut u8)
+                .add(pfn.index_from(self.base))
+                .write(entry.to_byte())
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pfn(usize);
 
 impl Pfn {
+    const EMPTY_PATTERN: usize = usize::MAX;
+
     fn to_addr(self) -> usize {
         self.0 * PAGE_SIZE
     }
@@ -90,6 +125,18 @@ impl Pfn {
 
     fn index_from(self, base: Pfn) -> usize {
         self.0 - base.0
+    }
+
+    unsafe fn read_next(self) -> Option<Pfn> {
+        let raw = unsafe { (self.to_addr() as *const usize).read() };
+
+        (raw != Self::EMPTY_PATTERN).then_some(Pfn(raw))
+    }
+
+    unsafe fn write_next(self, next: Option<Pfn>) {
+        let raw = next.map_or(Self::EMPTY_PATTERN, |next| next.0);
+
+        unsafe { (self.to_addr() as *mut usize).write(raw) }
     }
 }
 
@@ -209,5 +256,31 @@ impl Reservations<'_> {
             .filter(|range| range.start > pfn)
             .map(|range| range.start)
             .min()
+    }
+
+    fn free_runs(&self) -> impl Iterator<Item = PageRange> {
+        let mut cursor = Pfn::from_addr_up(self.arena.base);
+        let end = Pfn::from_addr_down(self.arena.end());
+
+        core::iter::from_fn(move || {
+            while let Some(stop) = self.containing(cursor) {
+                cursor = stop;
+            }
+
+            if cursor >= end {
+                return None;
+            }
+
+            let next_reserved = self.next_base_above(cursor).unwrap_or(end).min(end);
+
+            let run = PageRange {
+                start: cursor,
+                end: next_reserved,
+            };
+
+            cursor = run.end;
+
+            Some(run)
+        })
     }
 }

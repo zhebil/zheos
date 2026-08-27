@@ -12,7 +12,7 @@ This task was one thing: turn that chip on and prove something reaches your hand
 No useful handler yet. Just make the wire live. That is now done.
 
 Sections 1 and 4-10 describe the hardware and do not change. Sections 2, 11 and 12 describe the code
-as it stands, and sections 13-14 are the tests and the failure table, both updated with what actually
+as it stands, and sections 13-14 are the proof and the failure table, both updated with what actually
 happened rather than what was expected.
 
 ---
@@ -107,7 +107,7 @@ open.
 
 Five gates, and a shut gate at any one of them produces exactly the same symptom: nothing. No fault,
 no message, no hint. This is the single most frustrating thing about interrupt bring-up, and it is
-why the test in section 13 matters more than usual.
+why the check in section 13 matters more than usual.
 
 Gate 1 belongs to UART IRQ and TIMER, which is why beads had both blocked on this one.
 

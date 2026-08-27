@@ -154,18 +154,7 @@ barrier, so the ordering is a matter of where you call it, not of synchronisatio
 What you are **not** building is anything for them to do. They park. That is the correct end state
 for this skill, and SCHED is what makes them useful.
 
-## 9. Testing it
-
-The host tests can cover the identifier decoding and not much else, because everything here is
-either firmware or per-core register state.
-
-The real test is the machine, and it is worth building one thing specifically for it: have each
-core print its index and its `MPIDR_EL1` when it comes up, then increment a shared counter under
-the lock, and have core 0 wait until the counter reaches the expected number before continuing.
-
-That gives you a boot log that names every core, and a hang that names how many are missing.
-
-## 10. When nothing happens
+## 9. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
@@ -179,10 +168,14 @@ That gives you a boot log that names every core, and a hang that names how many 
 | output is interleaved character by character | the serial port is shared and nothing is serialising it. Correct behaviour, and the fix is a lock around the writer, not around the formatting. |
 | everything works with `-smp 2` and hangs with `-smp 4` | a fixed-size per-core array sized for two, or a spin that assumes it is the only waiter. |
 
-## 11. How you will know it worked
+## 10. How you will know it worked
 
 Four lines at boot, one per core, each naming its index and its `MPIDR_EL1`, printed without
 interleaving. Then core 0 continues past its wait and the monitor prompt appears as it always did.
+
+Have each core increment a shared counter under the lock as it reports in, and have core 0 wait
+until the counter reaches the expected number before continuing. That turns a missing core from a
+silent hang into a hang that names how many are missing.
 
 Two further checks that are worth the five minutes:
 

@@ -117,26 +117,7 @@ express that in Rust that is not a lie to the optimiser.
 Keep it to `stp` and `ldp` pairs, which store and load two registers at once and are the reason 12
 registers cost 6 instructions rather than 12.
 
-## 7. Testing it
-
-This is the hardest thing in the project to unit test on the host, and it is worth being honest
-about that rather than pretending.
-
-What the host can test: the fake stack builder. Given a stack region and an entry point, does it
-produce a 16-byte aligned pointer, with the entry point at the right offset, inside the region?
-That is arithmetic and it is where the bugs are, so it is worth testing properly even though it
-feels like testing nothing.
-
-What the host cannot test is the switch itself, since it is aarch64 assembly manipulating a real
-stack pointer.
-
-On the machine, the test that proves everything: two tasks that switch back and forth a fixed
-number of times, each incrementing its own counter, ending back in `kmain`. If both counters are
-right and the machine survives, every register that needed saving was saved. If a task's local
-variable is wrong after a switch, a callee-saved register was missed, and which one is recoverable
-by narrowing what the task touches.
-
-## 8. When nothing happens
+## 7. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
@@ -149,16 +130,16 @@ by narrowing what the task touches.
 | stack overflow inside a task corrupts another task | expected without guard pages. LOCKDOWN's guard page applies per task stack, and this is where that becomes a per-task problem rather than a one-stack problem. |
 | a floating point value is wrong after a switch | something started using the SIMD registers. Section 3, and it is the failure that arrives months late. |
 
-## 9. How you will know it worked
+## 8. How you will know it worked
 
 Two tasks, ping and pong, each with its own stack from the heap, switching to each other a hundred
 times, each printing its own counter at the end and both counters reading 100. Then a clean return
 into `kmain` and the monitor prompt.
 
 The stronger observable, worth the extra ten minutes: give each task a local variable it sets
-before the switch and checks after, with a different value per task. That is the direct test that
-callee-saved registers survived, and it fails specifically and readably when one is missing, rather
-than as a crash.
+before the switch and checks after, with a different value per task. That is the direct evidence
+that callee-saved registers survived, and it fails specifically and readably when one is missing,
+rather than as a crash.
 
 And print each task's stack pointer at each switch. Two numbers that alternate, each staying inside
 its own allocated region, is the whole skill visible in one column of output.

@@ -64,6 +64,12 @@ of a moving graph is guaranteed to be wrong.
 6. Do not introduce a crate or a macro that hides hardware detail unless they ask for it.
    Assembly only where unavoidable (the instructions before a stack exists); Rust everywhere
    else.
+7. **No tests, and no test-driven development.** Decided 2026-08-27, after the host unit tests
+   that existed were deleted. Do not write `#[cfg(test)]` modules, do not add a `cargo test`
+   target, do not propose writing a test first, and do not put a "Testing it" section in a
+   guide. The kernel is verified by booting it and reading the output - that is what the
+   "How you will know it worked" section of every guide is for. If a guide needs to argue that
+   something is correct, argue it as a boot-time observable.
 
 ## Build
 
@@ -179,9 +185,10 @@ Use the `find-docs` skill rather than recalling API details from memory.
 
 ## Note on the block below
 
-`bd init` generated it and rewrites it, so do not edit inside the markers. Two corrections: there
+`bd init` generated it and rewrites it, so do not edit inside the markers. Three corrections: there
 **is** a git remote now (`origin`, on the `github.com-personal` host alias), so `git push` applies;
-there is no Dolt remote, so ignore `bd dolt push`.
+there is no Dolt remote, so ignore `bd dolt push`; and where the session-close checklist says to run
+"Tests, linters, builds", there are no tests - the gate is `make lint`, and booting it.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker

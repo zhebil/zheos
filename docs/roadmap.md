@@ -22,7 +22,7 @@ The tree lives in **beads**, not in this file.
 ```sh
 bd ready            # skills unlockable right now - nothing is blocking them
 bd list             # the whole tree
-bd show <id>        # what a skill is, how it will be tested, and notes from building it
+bd show <id>        # what a skill is, plus notes from when it was built
 bd blocked          # what is still locked, and by what
 ```
 
@@ -77,7 +77,7 @@ Two survival utilities also sit here, unlocked by FOOTING rather than by the UAR
 | Skill | What it really is | What it unlocks |
 |---|---|---|
 | **IDLE** | `wfi` instead of `b .` in the park loop | The machine stops pinning a whole host CPU core while doing nothing. |
-| **SHUTDOWN** | PSCI `SYSTEM_OFF` via `HVC` | The kernel can end. Every scripted test terminates on its own instead of needing a kill. |
+| **SHUTDOWN** | PSCI `SYSTEM_OFF` via `HVC` | The kernel can end. Every scripted run terminates on its own instead of needing a kill. |
 
 EARS is the pivotal one in this tier. Everything before it is a program that talks at you.
 After it, the machine can be asked questions.

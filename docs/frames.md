@@ -47,7 +47,7 @@ exactly one customer for that, the page metadata, and it can serve itself. This 
 **The memory map** - the authoritative record of what physical memory exists and which parts are
 spoken for: the kernel image from the linker, the device tree blob, anything firmware reserved.
 This is not an allocator at all, it is a list, and FRAMES cannot free a single page without it.
-This half stays, and it is `reserve`, `reserved`, and the overlap test that `Bump` already has.
+This half stays, and it is `reserve`, `reserved`, and the overlap check that `Bump` already has.
 
 Linux keeps memblock alive after boot on arm64 for the second reason, not the first. `pfn_valid`,
 memory hotplug and kexec all ask it whether a physical address exists, long after
@@ -257,19 +257,19 @@ One new module, `src/frames.rs`, and a refactor of `src/bump.rs`.
 - `Frames::new(arena: Region, reserved: &[Region]) -> Option<Frames>` - the whole bootstrap from
   section 8, in one call, taking no allocator.
 - `alloc(&mut self, order: usize) -> Option<Pfn>` and `free(&mut self, pfn: Pfn, order: usize)`.
-- `free_pages(&self) -> usize`, because you cannot test any of this without it.
+- `free_pages(&self) -> usize`, because you cannot see any of this without it.
 
 **Changed in `bump.rs`:** the pointer-that-goes-up is now ten lines inside `Frames::new`, so what
 is left of `Bump` is the memory map from section 2 - the reserved list, `reserve`, and the overlap
-test. Whether that keeps the name `Bump`, becomes a `MemoryMap`, or gets folded into `frames.rs`
-as a private helper is a naming decision, and the honest test is whether anything outside FRAMES
-still calls it. Nothing should.
+check. Whether that keeps the name `Bump`, becomes a `MemoryMap`, or gets folded into `frames.rs`
+as a private helper is a naming decision, and the question that settles it is whether anything
+outside FRAMES still calls it. Nothing should.
 
 Note the signature: **`Frames::new` takes `Region` and a slice of `Region`, not a `&Dtb`.**
 `Bump::discover` today reaches into the device tree parser to find the blob's own extent, which is
 the memory layer calling sideways into board discovery. Collecting the reservations belongs to
-whoever already knows the machine. FRAMES then depends on `Region` and nothing else, which is
-what makes it testable with a synthetic arena and no device tree at all.
+whoever already knows the machine. FRAMES then depends on `Region` and nothing else, so it can be
+brought up against any arena you hand it.
 
 **Also changed in `main.rs`:** the reordering from section 3, and `Table::new` and `identity_map`
 now take `&mut Frames` instead of `&mut Bump`. Their bodies need one page at a time, which is
@@ -288,7 +288,7 @@ in the kernel where a data structure lives in the memory it manages, and it need
 `write_volatile` care and the same explicit reasoning as `Table::set` in `src/mmu/mod.rs:85`.
 
 Do not wrap this in a lock. LOCK is done, and `Frames` is a plain `&mut self` type; whoever owns
-it decides. That keeps it testable on the host and keeps the locking decision in one place.
+it decides. That keeps the locking decision in one place.
 
 **Where this sits in the architecture:** [`diagrams/architecture.tldx.jsx`](diagrams/architecture.tldx.jsx)
 has the layers. FRAMES joins the same one `Bump` and `mmu` are in already, and that
@@ -299,35 +299,7 @@ bootstrap into FRAMES changes nothing about that, because `Bump` never talked to
 it read linker symbols, which are compile-time constants, and a `&Dtb` that somebody else had
 already parsed.
 
-## 10. Testing it, starting with the tests
-
-Everything in this skill is host-testable, and the tests are unusually good ones, because the
-allocator has an invariant that is easy to state and easy to check exhaustively.
-
-Reuse the arena helper from `src/mmu/mod.rs:218` - real page-aligned memory from `std::alloc`,
-leaked.
-
-- An arena added as one aligned power-of-two region shows exactly one block at that order and
-  nothing at any other.
-- The staircase: a region that is not aligned decomposes into the orders section 8 predicts. Assert
-  the exact list, not just the total.
-- Allocating order 0 from an arena that has only a large block splits all the way down, and the
-  free counts at each order are what splitting predicts.
-- Allocate every page, one at a time, and the count matches `free_pages()` before you started.
-  One more allocation returns `None`.
-- Free them all in a **scrambled** order, and the arena comes back to exactly the block list it
-  started with. This is the single most valuable test in the skill, it catches merge bugs nothing
-  else catches, and it should run over several scramble orders.
-- The merge does not fire when the buddy is a different order. Split a block, allocate one of the
-  small halves, free its sibling, and assert nothing merged.
-- The merge does not fire when the buddy is in use.
-- Allocating and freeing at the maximum order does not merge past order 10.
-
-The scrambled free-and-recombine test is worth writing before the merge code, because it is the
-test that tells you the merge is right, and writing it first stops you from writing a merge that
-only handles the order it was debugged against.
-
-## 11. When nothing happens
+## 10. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
@@ -342,7 +314,7 @@ only handles the order it was debugged against.
 | a data abort reading a free list link | the link was written before the memory management unit mapped that page, or into a page that is not in the arena. Every free page is inside `board.memory`, which `identity_map` covered. |
 | the count is right and the addresses repeat | a block was pushed onto two lists, usually by splitting and forgetting to remove the parent from its own list before splitting it. |
 
-## 12. How you will know it worked
+## 11. How you will know it worked
 
 Print the decomposition at bring-up: the count of free blocks at each order, and the total free
 memory in bytes.

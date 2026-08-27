@@ -1,5 +1,5 @@
-#![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), no_main)]
+#![no_std]
+#![no_main]
 
 use core::{num::NonZeroU32, time::Duration};
 
@@ -11,14 +11,11 @@ use crate::{
     uart::uart,
 };
 
-#[cfg(not(test))]
 core::arch::global_asm!(include_str!("kernel.s"));
 
-#[cfg(not(test))]
 static ALREADY_PANICKED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-#[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     use core::{fmt::Write, sync::atomic::Ordering};

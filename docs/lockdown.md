@@ -145,24 +145,13 @@ No new module. Changes in three places:
 - New `Descriptor` constants beside `NORMAL_BLOCK` and `DEVICE_BLOCK`. They are the same shape with
   different `ap`, `pxn` and `uxn`, and they are the whole policy from section 4 written down once.
 
-Nothing in `src/mmu/` needs to change. That is worth noticing: the descriptor encoding was built
-general enough that a skill three tiers later adds no code to it.
+Nothing in `src/mmu/` needs to change for the encoding. That is worth noticing: the descriptor
+format was built general enough that a skill three tiers later adds no code to it. One thing does
+want changing, though: `translate` returns an address and not the permissions, so this skill wants
+it to return the descriptor instead, or to gain a second method that does. Without that there is no
+way to ask the table what it actually granted.
 
-## 8. Testing it
-
-The table-level tests are host tests and go in `src/mmu/`, where `translate` already gives you a
-walker to check against. But `translate` returns an address and not the permissions, so this skill
-probably wants it to return the descriptor instead, or a second method that does.
-
-- A region mapped read-only comes back with `AccessPermissions::KernelReadOnly` at every address
-  inside it, including the last byte.
-- Adjacent regions with different templates do not bleed into each other at the boundary. Check
-  the last address of one and the first of the next.
-- A page-granularity mapping inside a range that is later mapped coarsely keeps its own
-  permissions, which is the ordering rule from section 5 turned into a test.
-- The guard page translates to nothing.
-
-## 9. When nothing happens
+## 8. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
@@ -175,7 +164,7 @@ probably wants it to return the descriptor instead, or a second method that does
 | turning on `SCTLR_EL1.WXN` breaks the machine | something is executing from writable memory. That is the bit doing its job, and finding what is the point. |
 | permissions look right in `translate` and the machine faults anyway | the translation lookaside buffer still holds the old entry. Invalidate after changing a live mapping. |
 
-## 10. How you will know it worked
+## 9. How you will know it worked
 
 Four deliberate crimes, each of which should now be a fault with a report rather than a success:
 

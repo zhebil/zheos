@@ -134,23 +134,7 @@ finished skill and should be made deliberately rather than discovered.
 - Task exit: a task's entry point returning has to free its stack and never come back, which is the
   fake `x30` slot from SWITCH section 5 finally getting a real value.
 
-## 9. Testing it
-
-The queue and the state machine are host-testable and worth testing hard, because they are ordinary
-data structures and the bugs in them are ordinary bugs:
-
-- round robin order is actually round robin, over several rotations
-- a blocked task is never picked
-- waking a blocked task puts it at the back, not the front
-- an empty queue picks the idle task
-- exiting the last task does not leave the queue in a state that picks a freed task
-
-What only the machine can test is the preemption itself, and the test that proves it is a task with
-no yield in it at all: a tight infinite loop that increments a counter. If another task still runs,
-preemption works. That single test is worth more than the rest combined, because it is the property
-the whole skill exists for.
-
-## 10. When nothing happens
+## 9. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
@@ -163,7 +147,7 @@ the whole skill exists for.
 | ticks stop entirely after the first switch | the timer comparison register was not reprogrammed, because the handler switched away before reaching the line that does it. Reprogram before scheduling, not after. |
 | keystrokes are lost once `getc` blocks | the wake is happening from the interrupt handler into a queue behind a lock that the handler cannot take. The wake path has to be safe from interrupt context, which is a different constraint from the allocation path. |
 
-## 11. How you will know it worked
+## 10. How you will know it worked
 
 Three tasks printing their own names in a loop with no yield anywhere in them, interleaving evenly,
 while the monitor still responds to keystrokes.

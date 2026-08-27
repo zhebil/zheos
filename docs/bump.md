@@ -438,7 +438,7 @@ does not matter today with the MMU off and does matter to Miri and to future-you
 
 **`remaining()` is `end - next` and is an upper bound.** Reservations ahead of `next` are not
 subtracted. Say so in the doc comment; it is one line versus a scan, and the only consumer is
-an exhaustion test.
+exhaustion.
 
 **`MAX_RESERVED = 8`.** Two are used. `INIT_MEMBLOCK_REGIONS` is 128 for the same reason and
 with the same justification, which is none.
@@ -545,7 +545,7 @@ is the pass, and a non-zero value tells you *how far off* you are, which usually
 before jumping a reservation instead of after.
 
 **Nothing handed out ever intersects a reservation.** The invariant the type exists for, and
-worth an assertion inside `alloc` itself rather than only in a test.
+worth an assertion inside `alloc` itself.
 
 **The DTB is stepped over, cheaply.** Allocating 112 MiB to reach `0x4700_0000` works and takes
 a while. The fast version is a second `Bump` in the self-check, built over a fake `Region` with
@@ -573,12 +573,6 @@ and `kmain` halts with a message. A dropped reservation is silent corruption 112
 **The kernel still works afterwards.** Allocate several MiB, write to all of it, then print
 something. If the shell still echoes and the timer still ticks, you have not walked over the
 stack or the vectors.
-
-**One runnable check.** There is no test harness yet - that is PROVING GROUND (`zheos-smj`),
-deliberately not a dependency of this. The smallest thing that fails loudly is a
-`fn self_check()` in `bump.rs` full of `assert!`s over a synthetic arena, called once from
-`kmain`, printing one line. `assert!` already routes through your panic handler, which already
-prints over the UART. Nothing to build.
 
 ---
 

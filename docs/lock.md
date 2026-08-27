@@ -25,8 +25,8 @@ comment. It names its assumption exactly, distinguishes itself from the neighbou
 **silently false**, and nothing will tell you.
 
 That comment does not get edited when MANY CORES lands. It gets **re-derived** - by you, months
-from now, on code you no longer have in your head, one file at a time, with no test that fails if
-you get it wrong. That is the expensive part, and it is expensive in proportion to how much code
+from now, on code you no longer have in your head, one file at a time, with nothing that complains
+if you get it wrong. That is the expensive part, and it is expensive in proportion to how much code
 exists when you pay it.
 
 An uncontended lock costs one atomic read-modify-write, a handful of nanoseconds, and it is
@@ -73,8 +73,8 @@ because kernel code always has both hazards.
 **The order matters and the failure is not obvious.** Take the lock first and there is a window
 where you hold it with interrupts still enabled. An interrupt landing in that window whose handler
 wants the same lock is hazard one, and you have just built the deadlock the masking was there to
-prevent. The window is two instructions wide, which means it will not show up in testing and will
-show up in a month.
+prevent. The window is two instructions wide, which means you will not hit it while you are looking
+and you will hit it in a month.
 
 **Restore, never unmask.** `cpu::without_interrupts` at `src/cpu.rs:24` already gets this right,
 and its doc comment says why: it puts the processor state back exactly as it found it. If it
@@ -193,7 +193,7 @@ be writing it.
 
 If you take one thing from this section: the atomic makes the lock **exclusive**, and the ordering
 makes the lock **useful**. Get the first right and the second wrong and the code works on your
-machine, works under test, and breaks on hardware that reorders more aggressively than QEMU.
+machine and breaks on hardware that reorders more aggressively than QEMU.
 
 ## 7. Spinning, and the cheap version of it
 
@@ -252,7 +252,7 @@ One module, `src/lock.rs`, plus edits to two existing files.
   is exactly what `Send` means.
 - `lock(&self) -> SpinLockGuard<'_, T>` doing mask, then acquire, in that order.
 - `try_lock(&self) -> Option<SpinLockGuard<'_, T>>` - one attempt, no spin. Needed by anything
-  that must not block, and needed by the tests.
+  that must not block.
 - `SpinLockGuard<'a, T>` holding a reference to the lock and the saved processor state, with
   `Deref`, `DerefMut` and `Drop`.
 
@@ -279,27 +279,7 @@ iteration on a path that is already the slow one, and it converts your worst fai
 
 Keeping the repo's no-panic rule: report and halt, do not panic.
 
-## 11. Testing it
-
-Host tests, the same way `mmu` and `bump` are tested, with one addition: this is the first type in
-the repo where **real threads** are the natural test. `#[cfg(test)]` builds with `std`, so
-`std::thread` is available.
-
-- `try_lock` on a free lock succeeds; a second `try_lock` while the first guard lives fails.
-- Dropping the guard makes `try_lock` succeed again.
-- The guard gives out the value and mutations through it are visible after it is dropped.
-- Many threads incrementing a locked counter a large number of times end at exactly the expected
-  total. This is the test that fails if the ordering is wrong, and it is worth running many times,
-  because a memory-ordering bug is a probability rather than an event.
-
-What the host cannot test is the interrupt half, since there is no DAIF on the machine running
-`cargo test`. That means `cpu::without_interrupts` has to be behind something the host build can
-substitute, or the masking has to sit outside the part under test. Decide which when you write it -
-it is the one design question in this skill that the tests, not the hardware, are going to force.
-
-The observable for the interrupt half is on the machine: section 13.
-
-## 12. When nothing happens
+## 11. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
@@ -307,12 +287,11 @@ The observable for the interrupt half is on the machine: section 13.
 | stops the first time a key is pressed, but only sometimes | masking and locking are in the wrong order. The window is two instructions wide and an interrupt has to land inside it. Section 3. |
 | interrupts stay off after a guard is dropped | the guard unmasked instead of restoring, or it restored a state captured at the wrong moment. Save before masking, not after. |
 | nothing ever wakes up, `getc` never returns | a `wfi` inside a critical section. Section 7. |
-| the counter test ends short, rarely, and only in release builds | the orderings. `Relaxed` on the take, or `Relaxed` on the release. The exclusion is right and the fences are missing, which is the failure that survives every test that is not stress. |
+| a shared counter ends short, rarely, and only in release builds | the orderings. `Relaxed` on the take, or `Relaxed` on the release. The exclusion is right and the fences are missing, and this is the failure mode that only shows up under real contention. |
 | `stxr` never succeeds, loop spins forever | writing to the same granule from the loop body. Anything stored between the `ldxr` and the `stxr` can clear the monitor, including a `println!` for debugging. Print outside the loop. |
 | the guard is dropped and the lock stays held | an early `return` or `?` in the critical section that moved the guard, or a `let _ = lock.lock()` which drops it immediately. `let _guard =`, never `let _ =`. |
-| `cargo test` passes and the machine hangs | the host build stubbed out the masking. Expected, and exactly why section 13 exists. |
 
-## 13. How you will know it worked
+## 12. How you will know it worked
 
 The lock is invisible when it works, so test it by making it visible.
 

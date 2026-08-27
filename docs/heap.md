@@ -191,8 +191,8 @@ static:
 heap::with(|frames| { ... })
 ```
 
-Signatures of the things being called do not change, so the host tests still hand them a local.
-And the lock guard from LOCK is already closure-shaped, so the two compose rather than fight.
+Signatures of the things being called do not change. And the lock guard from LOCK is already
+closure-shaped, so the two compose rather than fight.
 
 ### Interrupts are already live
 
@@ -259,7 +259,7 @@ So ten pushes of a `u32` request **112 bytes** in total - `16 + 32 + 64` - and h
 live. With real freeing underneath, the first two blocks go straight back to their slab as the
 vector grows, so the memory actually in use afterwards is 64 bytes and not 112.
 
-Both numbers are your test, and they measure different things. Bytes requested is a property of
+Both numbers matter, and they measure different things. Bytes requested is a property of
 `RawVec` and will be 112 whatever you do. Bytes still held is a property of your allocator, and it
 is 64 only if `dealloc` really works. Print both.
 
@@ -284,8 +284,7 @@ for having built LOCK first: this skill inherits a safety proof instead of writi
 
 And, outside the type:
 
-- `static HEAP: Heap = Heap::new();` carrying `#[global_allocator]` **and** `#[cfg(not(test))]`.
-  The `cfg` is not optional; section 11 says what happens without it.
+- `static HEAP: Heap = Heap::new();` carrying `#[global_allocator]`.
 - `extern crate alloc;` in `main.rs`. The 2024 edition removed the need for `extern crate` for
   ordinary dependencies, but `alloc` is not an ordinary dependency - it is not in `Cargo.toml` and
   the compiler will not link it unless you name it.
@@ -319,41 +318,12 @@ all of `board.memory` with `Descriptor::NORMAL_BLOCK`, and the arena is a range 
 this is what breaks first, and it breaks as a data abort on a write to a `Vec` rather than
 anywhere near the mapping code.
 
-## 11. Testing it, starting with the tests
-
-`Heap` is testable on the host, the same way `mmu` is. `src/mmu/mod.rs:218` has the trick already:
-a helper that asks `std::alloc` for real page-aligned memory, leaks it, and describes it as a
-`Region`. Reuse it rather than writing a second one.
-
-The important rule, which is what the `#[cfg(not(test))]` above is for: **the tests never go
-through the global allocator.** They build a `Heap`, call `init` on it, and call
-`GlobalAlloc::alloc` on that instance explicitly. The global one stays out of the host build
-entirely.
-
-Tests worth having before the implementation:
-
-- an uninitialised `Heap` returns null for any request
-- after `init`, a request comes back non-null, inside the arena, and aligned as asked
-- two live requests do not overlap
-- a request larger than the arena comes back null, and consumes nothing
-- **allocate and free the same layout many times over, and `free_bytes()` returns to exactly what
-  it was.** This is the test the whole three-skill stack exists to pass, and it fails loudly if
-  any layer leaks.
-- a scrambled mix of sizes, allocated and freed in a shuffled order, also returns to the start
-- a zero-size layout is never passed down, because `alloc` should never see one, and asserting it
-  documents the contract
-
-What cannot be tested on the host is the acceptance criterion itself - a real `Vec` growing
-through your allocator - because routing `Vec` to a specific allocator instance needs an unstable
-feature. That one is a boot-time check on the machine, section 13.
-
-## 12. When nothing happens
+## 11. When nothing happens
 
 | symptom                                                                                  | almost certainly                                                                                                                                                                                                               |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | link fails, undefined symbol ending `__rust_no_alloc_shim_is_unstable_v2`                | `extern crate alloc` is there but `#[global_allocator]` is not, or it is behind a `cfg` that is off in this build. The marker symbol exists to make exactly this a link error instead of a mystery.                            |
 | link fails, undefined `__rust_alloc`                                                     | same cause. These two always appear together.                                                                                                                                                                                  |
-| `cargo test` prints `memory allocation of 4 bytes failed` and exits before any test runs | the `#[global_allocator]` static is missing `#[cfg(not(test))]`. The test harness allocates before it reaches your first test, and it is now allocating through an uninitialised allocator.                                    |
 | `memory allocation of N bytes failed` at the first `push` on the machine                 | `alloc` returned null. Either `heap::init` never ran, or it ran after the allocation, or memory really is exhausted. Print `free_bytes()` to tell which.                                                                       |
 | the machine stops dead on the first allocation, no output                                | `alloc` allocated. A `println!`, a formatted error, or any bookkeeping inside the allocator takes the lock the current call already holds. Section 9.                                                                          |
 | `free_bytes()` drops and never comes back                                                | `dealloc` is reaching the wrong layer - freeing to FRAMES what SLAB handed out, or the reverse. The `Layout` decides which, and it has to be the same decision `alloc` made.                                                   |
@@ -363,7 +333,7 @@ feature. That one is a boot-time check on the machine, section 13.
 | everything works, `.text` grew by several kilobytes                                      | expected, and not from the allocator. `Box` and `Vec` pull in `raw_vec`, its overflow checks and its error path.                                                                                                               |
 | clippy complains about a `&mut` derived from a `&self`                                   | it is right to ask. Answer it in the safety comment rather than silencing it.                                                                                                                                                  |
 
-## 13. How you will know it worked
+## 12. How you will know it worked
 
 Push ten numbers into a `Vec<u32>` in `kmain`, print the length, print the sum, and print
 `heap::free_bytes()` before, during, and after the vector is dropped.

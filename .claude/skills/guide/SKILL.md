@@ -46,6 +46,8 @@ Follow `mmu.md`. It is the only guide that got through without a rewrite.
 6. **What you are building** - the shape and the interface, not the code.
 7. **How you will know it worked** - concrete observables and failure signatures. This is the last section. `mmu.md` §12 is the model.
 
+**No "Testing it" section.** The project has no tests and no test harness (`CLAUDE.md` working agreement, rule 7). Everything such a section would say belongs in section 7 as something the machine prints at boot. A correctness property worth stating is worth stating as an observable.
+
 Sources go after that, marked optional. Nothing before them may depend on reading them.
 
 ## The four rules that keep getting broken

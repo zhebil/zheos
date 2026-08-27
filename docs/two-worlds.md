@@ -110,22 +110,16 @@ second one is the interesting one, because it blocks, which means it goes throug
 - A user region: memory mapped with `AccessPermissions::AllReadWrite` and `pxn: true`, and a
   separate stack. Allocated from the heap, which by now can free it when the program exits.
 - A system call table, an argument validator, and the three calls from section 5.
-- A test program. It has no standard library, no allocator, and no way to do anything except
-  through your calls - which is what makes it the honest test of the interface.
+- A user program. It has no standard library, no allocator, and no way to do anything except
+  through your calls - which is what makes it an honest exercise of the interface.
 
-## 7. Testing it
+The validator is the one piece of this skill where being wrong is worse than being incomplete, and
+it is pure arithmetic, so decide all four of its answers on paper before writing it: a range that
+starts inside the region and ends outside is rejected, a range that wraps around is rejected, a
+range exactly filling the region is accepted, and a zero-length range is decided one way
+deliberately rather than by accident.
 
-Host tests cover the argument validator, which is where the security-relevant bugs are and which is
-pure arithmetic: a range that starts inside and ends outside is rejected, a range that wraps around
-is rejected, a zero-length range is decided one way deliberately, a range exactly filling the
-region is accepted.
-
-Write those before the calls. The validator is the one piece of this skill where being wrong is
-worse than being incomplete.
-
-Everything else is on the machine.
-
-## 8. When nothing happens
+## 7. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
@@ -138,7 +132,7 @@ Everything else is on the machine.
 | a system call works from one task and faults from another | the validator is checking against a global region rather than the calling task's. |
 | `SP_EL0` looks correct and the program's stack is corrupt | the kernel is running on `SP_EL0` somewhere, usually because `SPSR_EL1` selected `SP_EL0` for exception level 1 by mistake. |
 
-## 9. How you will know it worked
+## 8. How you will know it worked
 
 A program, running at exception level 0, that prints a line, reads a keystroke, echoes it, and
 exits cleanly back into the kernel.

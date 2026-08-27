@@ -143,28 +143,7 @@ the alignment is the bug section 10 is about.
 The hard part is section 5's pointer-to-slab question, and it is hard because it is invisible until
 you write `free`. Answer it on paper first.
 
-## 8. Testing it
-
-Host-testable, over a `Frames` built on the leaked arena from `src/mmu/mod.rs:218`.
-
-- A request rounds up to the class the table says, for every class boundary and for one byte
-  either side of each.
-- Every object handed out is inside its page, aligned to its class, and distinct from every other
-  live object.
-- Filling a slab exactly consumes one page from FRAMES and no more. Ask FRAMES for its free count
-  before and after.
-- One more allocation after that takes a second page.
-- Freeing every object in a slab returns the page to FRAMES, and the free count comes back to what
-  it was.
-- Freeing all but one object does **not** return the page.
-- Allocation and freeing in a scrambled order, repeatedly, never hands out the same address twice
-  while it is live and always returns every page in the end. This is the SLAB counterpart of the
-  scrambled test in FRAMES, and it is the one worth writing first.
-- A request larger than the biggest class forwards to FRAMES and comes back page-aligned.
-- A request with an alignment larger than its size gets something correctly aligned, which is the
-  case a size-only class lookup gets wrong.
-
-## 9. When nothing happens
+## 8. When nothing happens
 
 | symptom | almost certainly |
 | --- | --- |
@@ -177,7 +156,7 @@ Host-testable, over a `Frames` built on the leaked arena from `src/mmu/mod.rs:21
 | freeing works for the first slab and faults for later ones | the pointer-to-slab step. If it is the masking trick, some slab is not page-aligned; if it is the lookup, the page frame number arithmetic is off by the arena base. |
 | everything works and FRAMES reports the wrong free count | a page taken from FRAMES for a slab and then returned at the wrong order. Slabs are one page, so order 0, always. |
 
-## 10. How you will know it worked
+## 9. How you will know it worked
 
 Print the class table, then run a workload and print the per-class statistics: slabs held, objects
 live, bytes requested against bytes handed out.

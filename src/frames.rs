@@ -71,6 +71,66 @@ impl Frames {
         count
     }
 
+    pub fn alloc(&mut self, order: usize) -> Option<Pfn> {
+        let mut available_order =
+            (order..=MAX_ORDER).find(|&o| self.free_lists.get(o).copied().flatten().is_some())?;
+
+        let pfn = self.pop(available_order)?;
+
+        while available_order > order {
+            available_order -= 1;
+            self.push(pfn.offset(1 << available_order), available_order);
+        }
+
+        self.write_entry(
+            pfn,
+            MetadataEntry {
+                free: false,
+                order: order as u8,
+            },
+        );
+
+        Some(pfn)
+    }
+
+    pub fn free(&mut self, mut pfn: Pfn) {
+        let metadata = self.read_entry(pfn);
+        if metadata.free {
+            return;
+        }
+
+        let mut order = metadata.order as usize;
+
+        while order < MAX_ORDER {
+            let buddy = Frames::buddy(pfn, order);
+
+            if !self.arena().contains(buddy) {
+                break;
+            }
+
+            let buddy_metadata = self.read_entry(buddy);
+
+            if !buddy_metadata.free || buddy_metadata.order != order as u8 {
+                break;
+            }
+
+            if self.unlink(buddy, order).is_none() {
+                break;
+            };
+
+            pfn = pfn.min(buddy);
+            order += 1;
+        }
+
+        self.push(pfn, order);
+    }
+
+    fn buddy(pfn: Pfn, order: usize) -> Pfn {
+        let offset = 1 << order;
+        let buddy_offset = pfn.0 ^ offset;
+        Pfn(buddy_offset)
+    }
+
     fn seed(&mut self, reservations: &Reservations) {
         for run in reservations.free_runs() {
             let mut block = run.start;
@@ -108,11 +168,59 @@ impl Frames {
         Some(())
     }
 
+    fn pop(&mut self, order: usize) -> Option<Pfn> {
+        let pfn = (*self.free_lists.get(order)?)?;
+
+        self.unlink(pfn, order)?;
+        Some(pfn)
+    }
+
+    fn unlink(&mut self, pfn: Pfn, order: usize) -> Option<()> {
+        let head = self.free_lists.get_mut(order)?;
+        let mut current = (*head)?;
+
+        if current == pfn {
+            *head = unsafe { pfn.read_next() };
+            self.free_pages -= 1 << order;
+            return Some(());
+        }
+
+        loop {
+            let next = unsafe { current.read_next() }?;
+
+            if next == pfn {
+                let after = unsafe { pfn.read_next() };
+                unsafe { current.write_next(after) };
+
+                self.free_pages -= 1 << order;
+                return Some(());
+            }
+
+            current = next;
+        }
+    }
+
     fn write_entry(&mut self, pfn: Pfn, entry: MetadataEntry) {
         unsafe {
             (self.metadata.base as *mut u8)
                 .add(pfn.index_from(self.base))
                 .write(entry.to_byte())
+        }
+    }
+
+    fn read_entry(&self, pfn: Pfn) -> MetadataEntry {
+        let byte = unsafe {
+            (self.metadata.base as *const u8)
+                .add(pfn.index_from(self.base))
+                .read()
+        };
+        MetadataEntry::from_byte(byte)
+    }
+
+    fn arena(&self) -> PageRange {
+        PageRange {
+            start: self.base,
+            end: self.base.offset(self.pages),
         }
     }
 }
@@ -129,7 +237,7 @@ pub struct Pfn(usize);
 impl Pfn {
     const EMPTY_PATTERN: usize = usize::MAX;
 
-    fn to_addr(self) -> usize {
+    pub fn to_addr(self) -> usize {
         self.0 * PAGE_SIZE
     }
 
@@ -184,7 +292,6 @@ impl MetadataEntry {
         (self.free as u8) | (self.order << 1)
     }
 
-    #[allow(dead_code)]
     fn from_byte(byte: u8) -> Self {
         Self {
             free: (byte & 1) != 0,
@@ -193,7 +300,7 @@ impl MetadataEntry {
     }
 }
 
-struct PageRange {
+pub struct PageRange {
     // including
     start: Pfn,
     // excluding

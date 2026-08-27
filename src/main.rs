@@ -105,7 +105,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         }
     };
 
-    let Some(frames) = Frames::new(board.memory, &[image, dtb.region()]) else {
+    let Some(mut frames) = Frames::new(board.memory, &[image, dtb.region()]) else {
         println!("No room for the page metadata");
         halt();
     };
@@ -123,6 +123,17 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
             println!("order {order}: {blocks} x {} pages", 1usize << order);
         }
     }
+
+    println!("frames: {frames}");
+
+    let Some(page) = frames.alloc(0) else {
+        println!("No page to allocate");
+        halt();
+    };
+
+    println!("alloc(0): {:#012x}", page.to_addr());
+
+    frames.free(page);
 
     println!("frames: {frames}");
 

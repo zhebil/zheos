@@ -6,81 +6,61 @@ const PAGE_SIZE: usize = 4096;
 const MAX_ORDER: usize = 10;
 
 pub struct Frames {
-    arena: Region,
-    list: [Pfn; MAX_ORDER + 1],
+    base: Pfn,
+    pages: usize,
+    metadata: Region,
+    free_lists: [Option<Pfn>; MAX_ORDER + 1],
+    free_pages: usize,
 }
 
 impl Frames {
     pub fn new(arena: Region, reserved: &[Region]) -> Option<Frames> {
-        let metadata_size = (arena.size / PAGE_SIZE).next_multiple_of(PAGE_SIZE);
-        let layout = Layout::from_size_align(metadata_size, PAGE_SIZE).ok()?;
+        let base = align_up(arena.base, PAGE_SIZE);
+        let end = arena.end() & !(PAGE_SIZE - 1);
+        let pages = end.checked_sub(base)? / PAGE_SIZE;
 
-        let metadata_ptr = Self::alloc_itself(arena, layout, reserved)?;
-        let metadata_region = Region {
-            base: metadata_ptr.as_ptr() as usize,
-            size: layout.size(),
-        };
-
-        for addr in (metadata_region.base..metadata_region.end()).step_by(8) {
-            unsafe {
-                *(addr as *mut u64) = 0;
-            }
+        if pages == 0 {
+            return None;
         }
 
-        // 8 bits per metadata entry
-        let metadata_slice = unsafe {
-            core::slice::from_raw_parts_mut(metadata_region.base as *mut u8, metadata_region.size)
+        let arena = Region {
+            base,
+            size: end - base,
         };
 
-        // Free everything that is not reserved
-
-        Some(Frames {
+        let mut reservations = Reservations {
             arena,
-            list: [Pfn(0); MAX_ORDER + 1],
-        })
+            regions: reserved,
+            metadata: None,
+        };
+
+        let layout = Layout::from_size_align(pages.next_multiple_of(PAGE_SIZE), PAGE_SIZE).ok()?;
+        let metadata = reservations.reserve_metadata(layout)?;
+        let metadata_ptr = NonNull::new(metadata.base as *mut u8)?;
+
+        // SAFETY: reserve_metadata returned a range inside the arena that overlaps
+        // no reservation, and nothing else holds a pointer into it.
+        unsafe { metadata_ptr.write_bytes(0, metadata.size) };
+
+        let mut frames = Frames {
+            base: Pfn(base / PAGE_SIZE),
+            pages,
+            metadata,
+            free_lists: [None; MAX_ORDER + 1],
+            free_pages: 0,
+        };
+
+        // frames.seed(&reservations);
+
+        Some(frames)
     }
 
-    fn alloc_itself(arena: Region, layout: Layout, reserved: &[Region]) -> Option<NonNull<u8>> {
-        let mut count = 0;
-        let mut next = arena.base;
-        loop {
-            // There could not be more jumps than reserved regions
-            if count > reserved.len() {
-                return None;
-            }
-
-            count += 1;
-            let start = align_up(next, layout.align());
-            let region = Region {
-                base: start,
-                size: layout.size(),
-            };
-
-            if region.end() > arena.end() {
-                return None;
-            }
-
-            if let Some(r) = Self::intersected_reserved_region(reserved, region) {
-                next = r.end();
-                continue;
-            }
-
-            return NonNull::new(start as *mut u8);
-        }
-    }
-
-    fn intersected_reserved_region(reserved: &[Region], region: Region) -> Option<Region> {
-        for r in reserved {
-            if region.is_overlapping(r) {
-                return Some(*r);
-            }
-        }
-
-        None
+    pub fn metadata(&self) -> Region {
+        self.metadata
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pfn(usize);
 
 impl Pfn {
@@ -88,8 +68,28 @@ impl Pfn {
         self.0 * PAGE_SIZE
     }
 
-    fn from_addr(addr: usize) -> Self {
+    fn from_addr_down(addr: usize) -> Self {
         Self(addr / PAGE_SIZE)
+    }
+
+    fn from_addr_up(addr: usize) -> Self {
+        Self(addr.div_ceil(PAGE_SIZE))
+    }
+
+    fn offset(self, offset: usize) -> Self {
+        Self(self.0 + offset)
+    }
+
+    fn pages_until(self, end: Pfn) -> usize {
+        end.0 - self.0
+    }
+
+    fn alignment_order(self) -> usize {
+        self.0.trailing_zeros() as usize
+    }
+
+    fn index_from(self, base: Pfn) -> usize {
+        self.0 - base.0
     }
 }
 
@@ -112,5 +112,102 @@ impl MetadataEntry {
             free: (byte & 1) != 0,
             order: byte >> 1,
         }
+    }
+}
+
+struct PageRange {
+    // including
+    start: Pfn,
+    // excluding
+    end: Pfn,
+}
+
+impl PageRange {
+    fn new(region: Region, arena: Region) -> Option<Self> {
+        let base = region.base.max(arena.base);
+        let end = region.end().min(arena.end());
+        if base < end {
+            Some(Self {
+                start: Pfn::from_addr_down(base),
+                end: Pfn::from_addr_up(end),
+            })
+        } else {
+            None
+        }
+    }
+
+    fn contains(&self, pfn: Pfn) -> bool {
+        self.start <= pfn && pfn < self.end
+    }
+
+    fn overlaps(&self, other: &PageRange) -> bool {
+        self.start < other.end && other.start < self.end
+    }
+}
+
+struct Reservations<'a> {
+    arena: Region,
+    regions: &'a [Region],
+    metadata: Option<Region>,
+}
+
+impl Reservations<'_> {
+    fn reserve_metadata(&mut self, layout: Layout) -> Option<Region> {
+        let mut count = 0;
+        let mut next = self.arena.base;
+
+        loop {
+            // There could not be more jumps than reserved regions
+            if count > self.regions.len() {
+                return None;
+            }
+
+            count += 1;
+            let region = Region {
+                base: align_up(next, layout.align()),
+                size: layout.size(),
+            };
+
+            if region.end() > self.arena.end() {
+                return None;
+            }
+
+            let candidate = PageRange::new(region, self.arena)?;
+
+            if let Some(taken) = self.overlapping(&candidate) {
+                next = taken.end.to_addr();
+                continue;
+            }
+
+            self.metadata = Some(region);
+            return Some(region);
+        }
+    }
+
+    fn overlapping(&self, range: &PageRange) -> Option<PageRange> {
+        self.ranges().find(|other| other.overlaps(range))
+    }
+
+    fn ranges(&self) -> impl Iterator<Item = PageRange> {
+        let arena = self.arena;
+
+        self.regions
+            .iter()
+            .copied()
+            .chain(self.metadata)
+            .filter_map(move |region| PageRange::new(region, arena))
+    }
+
+    fn containing(&self, pfn: Pfn) -> Option<Pfn> {
+        self.ranges()
+            .find(|range| range.contains(pfn))
+            .map(|range| range.end)
+    }
+
+    fn next_base_above(&self, pfn: Pfn) -> Option<Pfn> {
+        self.ranges()
+            .filter(|range| range.start > pfn)
+            .map(|range| range.start)
+            .min()
     }
 }

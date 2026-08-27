@@ -41,6 +41,7 @@ mod console;
 mod cpu;
 mod dtb;
 mod exception;
+mod frames;
 mod gic;
 mod input;
 mod irq;

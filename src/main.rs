@@ -6,6 +6,7 @@ use core::{num::NonZeroU32, time::Duration};
 use crate::{
     board::{Board, Conduit},
     bump::Bump,
+    frames::{Frames, MAX_ORDER},
     mmu::{Table, descriptor::Descriptor},
     region::Region,
     uart::uart,
@@ -103,6 +104,27 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
             halt();
         }
     };
+
+    let Some(frames) = Frames::new(board.memory, &[image, dtb.region()]) else {
+        println!("No room for the page metadata");
+        halt();
+    };
+
+    // Frames placed its metadata inside the arena Bump is still handing out.
+    if bump.reserve(frames.metadata()).is_err() {
+        println!("No room to reserve the page metadata");
+        halt();
+    }
+
+    for order in 0..=MAX_ORDER {
+        let blocks = frames.free_blocks(order);
+
+        if blocks > 0 {
+            println!("order {order}: {blocks} x {} pages", 1usize << order);
+        }
+    }
+
+    println!("frames: {frames}");
 
     let Some(mut table) = Table::new(&mut bump) else {
         println!("No room for a translation table");

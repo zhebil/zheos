@@ -1,9 +1,9 @@
-use core::{alloc::Layout, ptr::NonNull};
+use core::{alloc::Layout, fmt::Display, ptr::NonNull};
 
 use crate::region::Region;
 
 const PAGE_SIZE: usize = 4096;
-const MAX_ORDER: usize = 10;
+pub const MAX_ORDER: usize = 10;
 
 pub struct Frames {
     base: Pfn,
@@ -59,8 +59,32 @@ impl Frames {
         self.metadata
     }
 
+    pub fn free_blocks(&self, order: usize) -> usize {
+        let mut count = 0;
+        let mut current = self.free_lists.get(order).copied().flatten();
+
+        while let Some(pfn) = current {
+            count += 1;
+            current = unsafe { pfn.read_next() };
+        }
+
+        count
+    }
+
     fn seed(&mut self, reservations: &Reservations) {
-        for run in reservations.free_runs() {}
+        for run in reservations.free_runs() {
+            let mut block = run.start;
+
+            while block < run.end {
+                // find largest power-of-2 block that fits in this run and is aligned
+                let order = MAX_ORDER
+                    .min(block.alignment_order())
+                    .min(block.pages_until(run.end).ilog2() as usize);
+
+                self.push(block, order);
+                block = block.offset(1 << order);
+            }
+        }
     }
 
     fn push(&mut self, pfn: Pfn, order: usize) -> Option<()> {
@@ -90,6 +114,12 @@ impl Frames {
                 .add(pfn.index_from(self.base))
                 .write(entry.to_byte())
         }
+    }
+}
+
+impl Display for Frames {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} of {} pages free", self.free_pages, self.pages)
     }
 }
 
@@ -154,6 +184,7 @@ impl MetadataEntry {
         (self.free as u8) | (self.order << 1)
     }
 
+    #[allow(dead_code)]
     fn from_byte(byte: u8) -> Self {
         Self {
             free: (byte & 1) != 0,

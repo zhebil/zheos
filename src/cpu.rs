@@ -22,14 +22,23 @@ pub fn unmask_irqs() {
 /// Restoring rather than unmasking is what makes this safe to call from a
 /// handler, where exception entry has already masked everything.
 pub fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
-    let daif = read_daif();
-    mask_irqs();
+    let daif = stop_interrupts();
 
     let result = f();
 
-    restore_daif(daif);
+    restore_interrupts(daif);
 
     result
+}
+
+pub fn stop_interrupts() -> u64 {
+    let daif = read_daif();
+    mask_irqs();
+    daif
+}
+
+pub fn restore_interrupts(daif: u64) {
+    restore_daif(daif);
 }
 
 fn read_daif() -> u64 {

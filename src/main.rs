@@ -44,6 +44,7 @@ mod exception;
 mod gic;
 mod input;
 mod irq;
+mod lock;
 mod mmio;
 mod mmu;
 mod print;
@@ -156,7 +157,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
 /// Stops, but stays readable: powering off would leave nothing to attach to,
 /// and a dead machine looks exactly like a hung one from the outside.
-fn halt() -> ! {
+pub(crate) fn halt() -> ! {
     uart().flush();
 
     loop {

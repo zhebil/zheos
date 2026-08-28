@@ -61,7 +61,7 @@ impl Frames {
 
         while let Some(pfn) = current {
             count += 1;
-            current = unsafe { pfn.read_next() };
+            current = unsafe { pfn.read_links() }.next;
         }
 
         count
@@ -110,9 +110,7 @@ impl Frames {
                 break;
             }
 
-            if self.unlink(buddy, order).is_none() {
-                break;
-            };
+            self.unlink(buddy, order);
 
             pfn = pfn.min(buddy);
             order += 1;
@@ -147,7 +145,18 @@ impl Frames {
         let head = self.free_lists.get_mut(order)?;
         let current = *head;
 
-        unsafe { pfn.write_next(current) };
+        unsafe {
+            pfn.write_links(Links {
+                prev: None,
+                next: current,
+            })
+        };
+
+        if let Some(current) = current {
+            let mut links = unsafe { current.read_links() };
+            links.prev = Some(pfn);
+            unsafe { current.write_links(links) };
+        }
 
         *head = Some(pfn);
 
@@ -167,33 +176,30 @@ impl Frames {
     fn pop(&mut self, order: usize) -> Option<Pfn> {
         let pfn = (*self.free_lists.get(order)?)?;
 
-        self.unlink(pfn, order)?;
+        self.unlink(pfn, order);
         Some(pfn)
     }
 
-    fn unlink(&mut self, pfn: Pfn, order: usize) -> Option<()> {
-        let head = self.free_lists.get_mut(order)?;
-        let mut current = (*head)?;
+    fn unlink(&mut self, pfn: Pfn, order: usize) {
+        let Links { prev, next } = unsafe { pfn.read_links() };
 
-        if current == pfn {
-            *head = unsafe { pfn.read_next() };
-            self.free_pages -= 1 << order;
-            return Some(());
+        // Move prev to next and next to prev
+        if let Some(prev) = prev {
+            let mut links = unsafe { prev.read_links() };
+            links.next = next;
+            unsafe { prev.write_links(links) };
+        } else {
+            let head = self.free_lists.get_mut(order).unwrap();
+            *head = next;
         }
 
-        loop {
-            let next = unsafe { current.read_next() }?;
-
-            if next == pfn {
-                let after = unsafe { pfn.read_next() };
-                unsafe { current.write_next(after) };
-
-                self.free_pages -= 1 << order;
-                return Some(());
-            }
-
-            current = next;
+        if let Some(next) = next {
+            let mut links = unsafe { next.read_links() };
+            links.prev = prev;
+            unsafe { next.write_links(links) };
         }
+
+        self.free_pages -= 1 << order;
     }
 
     fn write_entry(&mut self, pfn: Pfn, entry: MetadataEntry) {
@@ -261,16 +267,38 @@ impl Pfn {
         self.0 - base.0
     }
 
-    unsafe fn read_next(self) -> Option<Pfn> {
-        let raw = unsafe { (self.to_addr() as *const usize).read() };
+    unsafe fn read_links(self) -> Links {
+        let raw = unsafe { (self.to_addr() as *const [usize; 2]).read() };
 
-        (raw != Self::EMPTY_PATTERN).then_some(Pfn(raw))
+        Links::decode(raw)
     }
 
-    unsafe fn write_next(self, next: Option<Pfn>) {
-        let raw = next.map_or(Self::EMPTY_PATTERN, |next| next.0);
+    unsafe fn write_links(self, links: Links) {
+        let raw = links.encode();
 
-        unsafe { (self.to_addr() as *mut usize).write(raw) }
+        unsafe { (self.to_addr() as *mut [usize; 2]).write(raw) }
+    }
+}
+
+struct Links {
+    prev: Option<Pfn>,
+    next: Option<Pfn>,
+}
+
+impl Links {
+    fn encode(&self) -> [usize; 2] {
+        let prev = self.prev.map_or(Pfn::EMPTY_PATTERN, |pfn| pfn.0);
+        let next = self.next.map_or(Pfn::EMPTY_PATTERN, |pfn| pfn.0);
+        [prev, next]
+    }
+
+    fn decode(value: [usize; 2]) -> Self {
+        let prev = value[0];
+        let next = value[1];
+        Self {
+            prev: (prev != Pfn::EMPTY_PATTERN).then_some(Pfn(prev)),
+            next: (next != Pfn::EMPTY_PATTERN).then_some(Pfn(next)),
+        }
     }
 }
 

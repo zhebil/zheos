@@ -44,7 +44,11 @@ impl FreeLists {
     }
 
     pub fn push(&mut self, pfn: Pfn, order: usize) {
-        let head = self.heads[order];
+        let Some(slot) = self.heads.get_mut(order) else {
+            return;
+        };
+        let head = *slot;
+        *slot = Some(pfn);
 
         unsafe {
             write_links(
@@ -63,7 +67,6 @@ impl FreeLists {
             unsafe { write_links(head, links) };
         }
 
-        self.heads[order] = Some(pfn);
         self.pages += 1 << order;
     }
 
@@ -86,7 +89,11 @@ impl FreeLists {
                 unsafe { write_links(prev, links) };
             }
             // No prev means this was the head, so the head moves on.
-            None => self.heads[order] = next,
+            None => {
+                if let Some(slot) = self.heads.get_mut(order) {
+                    *slot = next;
+                }
+            }
         }
 
         // Update next's prev pointer

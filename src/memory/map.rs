@@ -42,7 +42,7 @@ impl MemoryMap {
     }
 
     pub fn reserved(&self) -> impl Iterator<Item = Region> {
-        self.reserved[..self.len].iter().copied()
+        self.reserved.iter().take(self.len).copied()
     }
 
     pub fn unreserved(&self) -> impl Iterator<Item = PageRange> {

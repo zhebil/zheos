@@ -2,7 +2,7 @@ pub const PAGE_SIZE: usize = 4096;
 
 /// Page Frame Number
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Pfn(pub usize);
+pub struct Pfn(usize);
 
 impl Pfn {
     const EMPTY_PATTERN: usize = usize::MAX;

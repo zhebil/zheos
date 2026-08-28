@@ -8,14 +8,8 @@ pub struct Region {
 }
 
 impl Region {
-    pub const EMPTY: Region = Region { base: 0, size: 0 };
-
     pub fn end(&self) -> usize {
         self.base + self.size
-    }
-
-    pub fn is_overlapping(&self, other: &Region) -> bool {
-        self.base < other.end() && other.base < self.end()
     }
 }
 

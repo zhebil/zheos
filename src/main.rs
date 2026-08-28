@@ -5,7 +5,6 @@ use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
-    bump::Bump,
     frames::{Frames, MAX_ORDER},
     mmu::{Table, descriptor::Descriptor},
     region::Region,
@@ -37,7 +36,6 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 }
 
 mod board;
-mod bump;
 mod console;
 mod cpu;
 mod dtb;
@@ -91,30 +89,16 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     irq::unmask();
 
-    let image = bump::image();
+    let image = image();
 
     println!("image: {}", image);
     println!("dtb: {}", dtb.region());
     println!("memory: {}", board.memory);
 
-    let mut bump = match Bump::discover(board.memory, &dtb) {
-        Ok(bump) => bump,
-        Err(unprotected) => {
-            println!("No room to reserve the {unprotected}");
-            halt();
-        }
-    };
-
     let Some(mut frames) = Frames::new(board.memory, &[image, dtb.region()]) else {
         println!("No room for the page metadata");
         halt();
     };
-
-    // Frames placed its metadata inside the arena Bump is still handing out.
-    if bump.reserve(frames.metadata()).is_err() {
-        println!("No room to reserve the page metadata");
-        halt();
-    }
 
     for order in 0..=MAX_ORDER {
         let blocks = frames.free_blocks(order);
@@ -137,7 +121,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     println!("frames: {frames}");
 
-    let Some(mut table) = Table::new(&mut bump) else {
+    let Some(mut table) = Table::new(&mut frames) else {
         println!("No room for a translation table");
         halt();
     };
@@ -150,12 +134,12 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     // Halting on failure rather than carrying on: a half-built table is worse
     // than a stop, because the next step turns the MMU on and walks it.
-    if let Err(error) = table.identity_map(&mut bump, devices, Descriptor::DEVICE_BLOCK) {
+    if let Err(error) = table.identity_map(&mut frames, devices, Descriptor::DEVICE_BLOCK) {
         println!("Failed to map devices: {error}");
         halt();
     }
 
-    if let Err(error) = table.identity_map(&mut bump, board.memory, Descriptor::NORMAL_BLOCK) {
+    if let Err(error) = table.identity_map(&mut frames, board.memory, Descriptor::NORMAL_BLOCK) {
         println!("Failed to map memory: {error}");
         halt();
     }
@@ -170,7 +154,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("sctlr_el1: {:b}", cpu::mmu::read_sctlr_el1());
 
     println!("table: {:#012x}", table.base());
-    println!("remaining memory: {}", bump.remaining());
+    println!("frames: {frames}");
 
     println!("0x0900_0000 -> {:?}", table.translate(0x0900_0000));
     println!("0x4008_0000 -> {:?}", table.translate(0x4008_0000));
@@ -187,6 +171,22 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     zhemon::Zhemon::new().start();
 
     shutdown(board.psci)
+}
+
+/// Location of kernel image
+fn image() -> Region {
+    unsafe extern "C" {
+        static __image_start: u8;
+        static __stack_top: u8;
+    }
+
+    let start = &raw const __image_start as usize;
+    let end = &raw const __stack_top as usize;
+
+    Region {
+        base: start,
+        size: end - start,
+    }
 }
 
 /// Stops, but stays readable: powering off would leave nothing to attach to,

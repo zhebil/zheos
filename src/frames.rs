@@ -2,7 +2,7 @@ use core::{alloc::Layout, fmt::Display, ptr::NonNull};
 
 use crate::region::Region;
 
-const PAGE_SIZE: usize = 4096;
+pub const PAGE_SIZE: usize = 4096;
 pub const MAX_ORDER: usize = 10;
 
 pub struct Frames {
@@ -53,10 +53,6 @@ impl Frames {
         frames.seed(&reservations);
 
         Some(frames)
-    }
-
-    pub fn metadata(&self) -> Region {
-        self.metadata
     }
 
     pub fn free_blocks(&self, order: usize) -> usize {

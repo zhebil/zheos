@@ -1,7 +1,7 @@
-use core::{alloc::Layout, fmt::Display, ptr::NonNull};
+use core::{fmt::Display, ptr::NonNull};
 
 use crate::{
-    bump::Bump,
+    frames::{Frames, PAGE_SIZE},
     mmu::{
         descriptor::{Descriptor, Kind},
         level::Level,
@@ -16,11 +16,11 @@ pub mod level;
 const SLOTS: usize = 512;
 const SLOT_MASK: usize = SLOTS - 1;
 
-/// Size and alignment in one type. A table is exactly one 4 KiB page, and every
-/// descriptor pointing at one assumes the low twelve bits of its address are zero,
-/// so the alignment is a correctness requirement rather than a preference.
-#[repr(C, align(4096))]
-struct Page([u64; SLOTS]);
+/// A table is exactly one page, and every descriptor pointing at one assumes the
+/// low twelve bits of its address are zero. `Frames` hands out whole pages at
+/// order 0, so the allocator's unit is the alignment guarantee - but only while
+/// the two sizes agree.
+const _: () = assert!(SLOTS * size_of::<u64>() == PAGE_SIZE);
 
 pub enum MapError {
     OutOfMemory,
@@ -49,11 +49,11 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new(bump: &mut Bump) -> Option<Table> {
-        let slots = bump.alloc(Layout::new::<Page>())?.cast();
+    pub fn new(frames: &mut Frames) -> Option<Table> {
+        let slots = NonNull::new(frames.alloc(0)?.to_addr() as *mut u64)?;
         let mut table = Table { slots };
 
-        // Zero table since Bump does not guarantee zeroed memory.
+        // Clear garbage that was left in memory.
         for slot in 0..SLOTS {
             table.set(slot, Descriptor::ZERO);
         }
@@ -69,11 +69,11 @@ impl Table {
     /// address, with `template` supplying everything but the address and the kind.
     pub fn identity_map(
         &mut self,
-        bump: &mut Bump,
+        frames: &mut Frames,
         region: Region,
         template: Descriptor,
     ) -> Result<(), MapError> {
-        self.map_range(bump, region, template, Level::Level1)
+        self.map_range(frames, region, template, Level::Level1)
     }
 
     /// Walk the table the way the hardware would and report where `va` lands, or
@@ -106,7 +106,12 @@ impl Table {
 
     /// The table below the slot `va` falls in, allocated and linked if it is not
     /// there yet.
-    fn child_table(&mut self, bump: &mut Bump, va: usize, level: Level) -> Result<Table, MapError> {
+    fn child_table(
+        &mut self,
+        frames: &mut Frames,
+        va: usize,
+        level: Level,
+    ) -> Result<Table, MapError> {
         let slot = level.slot_of(va);
         let descriptor = self.get(slot);
 
@@ -114,7 +119,7 @@ impl Table {
             // Table already was allocated. Reusing it.
             Kind::Table => Table::from_base(descriptor.address).ok_or(MapError::OutOfMemory),
             Kind::Invalid => {
-                let child = Table::new(bump).ok_or(MapError::OutOfMemory)?;
+                let child = Table::new(frames).ok_or(MapError::OutOfMemory)?;
 
                 self.set(
                     slot,
@@ -136,7 +141,7 @@ impl Table {
     /// One level of the walk. Each pass covers exactly one slot.
     fn map_range(
         &mut self,
-        bump: &mut Bump,
+        frames: &mut Frames,
         region: Region,
         template: Descriptor,
         level: Level,
@@ -163,8 +168,8 @@ impl Table {
                 // fine to map at all.
                 let next = level.next().ok_or(MapError::Unaligned(addr))?;
 
-                self.child_table(bump, addr, level)?.map_range(
-                    bump,
+                self.child_table(frames, addr, level)?.map_range(
+                    frames,
                     Region {
                         base: addr,
                         size: chunk_end - addr,

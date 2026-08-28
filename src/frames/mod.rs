@@ -1,14 +1,9 @@
-mod reservations;
+use core::{fmt::Display, ptr::NonNull};
 
-use core::{alloc::Layout, fmt::Display, ptr::NonNull};
-use reservations::Reservations;
-
-use crate::{
-    frames::reservations::align_up,
-    memory::{
-        pfn::{Links, PAGE_SIZE, Pfn},
-        region::{PageRange, Region},
-    },
+use crate::memory::{
+    map::MemoryMap,
+    pfn::{Links, PAGE_SIZE, Pfn},
+    region::{PageRange, Region},
 };
 
 pub const MAX_ORDER: usize = 10;
@@ -22,39 +17,39 @@ pub struct Frames {
 }
 
 impl Frames {
-    pub fn new(arena: Region, reserved: &[Region]) -> Option<Frames> {
-        let base = align_up(arena.base, PAGE_SIZE);
-        let end = arena.end() & !(PAGE_SIZE - 1);
-        let pages = end.checked_sub(base)? / PAGE_SIZE;
+    pub fn new(map: &mut MemoryMap) -> Option<Frames> {
+        let arena = map.arena();
+        let pages = arena.size / PAGE_SIZE;
 
         if pages == 0 {
             return None;
         }
 
-        let arena = Region {
-            base,
-            size: end - base,
+        let wanted = pages.div_ceil(PAGE_SIZE);
+
+        let run = map.unreserved().find(|run| run.pages() >= wanted)?;
+        let metadata = Region {
+            base: run.start.to_addr(),
+            size: wanted * PAGE_SIZE,
         };
 
-        let mut reservations = Reservations::new(arena, reserved);
+        map.reserve(metadata).ok()?;
 
-        let layout = Layout::from_size_align(pages.next_multiple_of(PAGE_SIZE), PAGE_SIZE).ok()?;
-        let metadata = reservations.reserve_metadata(layout)?;
         let metadata_ptr = NonNull::new(metadata.base as *mut u8)?;
 
-        // SAFETY: reserve_metadata returned a range inside the arena that overlaps
-        // no reservation, and nothing else holds a pointer into it.
+        // SAFETY: the run came from the map and overlaps no reservation, and
+        // nothing else holds a pointer into it.
         unsafe { metadata_ptr.write_bytes(0, metadata.size) };
 
         let mut frames = Frames {
-            base: Pfn(base / PAGE_SIZE),
+            base: Pfn(arena.base / PAGE_SIZE),
             pages,
             metadata,
             free_lists: [None; MAX_ORDER + 1],
             free_pages: 0,
         };
 
-        frames.seed(&reservations);
+        frames.seed(map);
 
         Some(frames)
     }
@@ -102,7 +97,7 @@ impl Frames {
         let mut order = metadata.order as usize;
 
         while order < MAX_ORDER {
-            let buddy = Frames::buddy(pfn, order);
+            let buddy = pfn.buddy(order);
 
             if !self.arena().contains(buddy) {
                 break;
@@ -123,14 +118,8 @@ impl Frames {
         self.push(pfn, order);
     }
 
-    fn buddy(pfn: Pfn, order: usize) -> Pfn {
-        let offset = 1 << order;
-        let buddy_offset = pfn.0 ^ offset;
-        Pfn(buddy_offset)
-    }
-
-    fn seed(&mut self, reservations: &Reservations) {
-        for run in reservations.free_runs() {
+    fn seed(&mut self, map: &MemoryMap) {
+        for run in map.unreserved() {
             let mut block = run.start;
 
             while block < run.end {

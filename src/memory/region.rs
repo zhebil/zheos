@@ -10,6 +10,8 @@ pub struct Region {
 }
 
 impl Region {
+    pub const EMPTY: Region = Region { base: 0, size: 0 };
+
     pub fn end(&self) -> usize {
         self.base + self.size
     }
@@ -42,11 +44,11 @@ impl PageRange {
         }
     }
 
-    pub fn contains(&self, pfn: Pfn) -> bool {
-        self.start <= pfn && pfn < self.end
+    pub fn pages(&self) -> usize {
+        self.start.pages_until(self.end)
     }
 
-    pub fn overlaps(&self, other: &PageRange) -> bool {
-        self.start < other.end && other.start < self.end
+    pub fn contains(&self, pfn: Pfn) -> bool {
+        self.start <= pfn && pfn < self.end
     }
 }

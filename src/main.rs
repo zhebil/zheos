@@ -6,7 +6,7 @@ use core::{num::NonZeroU32, time::Duration};
 use crate::{
     board::{Board, Conduit},
     frames::{Frames, MAX_ORDER},
-    memory::region::Region,
+    memory::{image, map::MemoryMap, region::Region},
     mmu::{Table, descriptor::Descriptor},
     uart::uart,
 };
@@ -89,16 +89,28 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     irq::unmask();
 
-    let image = image();
-
-    println!("image: {}", image);
+    println!("image: {}", image());
     println!("dtb: {}", dtb.region());
     println!("memory: {}", board.memory);
 
-    let Some(mut frames) = Frames::new(board.memory, &[image, dtb.region()]) else {
+    let Some(mut map) = MemoryMap::new(board.memory) else {
+        println!("The device tree reported no usable memory");
+        halt();
+    };
+
+    if map.reserve(image()).is_err() || map.reserve(dtb.region()).is_err() {
+        println!("No room to reserve the kernel image and the device tree");
+        halt();
+    }
+
+    let Some(mut frames) = Frames::new(&mut map) else {
         println!("No room for the page metadata");
         halt();
     };
+
+    for region in map.reserved() {
+        println!("reserved: {region}");
+    }
 
     for order in 0..=MAX_ORDER {
         let blocks = frames.free_blocks(order);
@@ -171,22 +183,6 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     zhemon::Zhemon::new().start();
 
     shutdown(board.psci)
-}
-
-/// Location of kernel image
-fn image() -> Region {
-    unsafe extern "C" {
-        static __image_start: u8;
-        static __stack_top: u8;
-    }
-
-    let start = &raw const __image_start as usize;
-    let end = &raw const __stack_top as usize;
-
-    Region {
-        base: start,
-        size: end - start,
-    }
 }
 
 /// Stops, but stays readable: powering off would leave nothing to attach to,

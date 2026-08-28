@@ -5,8 +5,6 @@ pub const PAGE_SIZE: usize = 4096;
 pub struct Pfn(usize);
 
 impl Pfn {
-    const EMPTY_PATTERN: usize = usize::MAX;
-
     pub fn to_addr(self) -> usize {
         self.0 * PAGE_SIZE
     }
@@ -38,41 +36,5 @@ impl Pfn {
     /// Get the buddy PFN for a given order.
     pub fn buddy(self, order: usize) -> Self {
         Self(self.0 ^ (1 << order))
-    }
-
-    // TODO: move out
-    pub unsafe fn read_links(self) -> Links {
-        let raw = unsafe { (self.to_addr() as *const [usize; 2]).read() };
-
-        Links::decode(raw)
-    }
-
-    // TODO: move out
-    pub unsafe fn write_links(self, links: Links) {
-        let raw = links.encode();
-
-        unsafe { (self.to_addr() as *mut [usize; 2]).write(raw) }
-    }
-}
-
-pub struct Links {
-    pub prev: Option<Pfn>,
-    pub next: Option<Pfn>,
-}
-
-impl Links {
-    fn encode(&self) -> [usize; 2] {
-        let prev = self.prev.map_or(Pfn::EMPTY_PATTERN, |pfn| pfn.0);
-        let next = self.next.map_or(Pfn::EMPTY_PATTERN, |pfn| pfn.0);
-        [prev, next]
-    }
-
-    fn decode(value: [usize; 2]) -> Self {
-        let prev = value[0];
-        let next = value[1];
-        Self {
-            prev: (prev != Pfn::EMPTY_PATTERN).then_some(Pfn(prev)),
-            next: (next != Pfn::EMPTY_PATTERN).then_some(Pfn(next)),
-        }
     }
 }

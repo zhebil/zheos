@@ -1,21 +1,21 @@
+mod lists;
 mod metadata;
 
 use core::fmt::Display;
 
 use crate::{
-    frames::metadata::{Entry, Metadata},
-    memory::{
-        map::MemoryMap,
-        pfn::{Links, Pfn},
+    frames::{
+        lists::FreeLists,
+        metadata::{Entry, Metadata},
     },
+    memory::{map::MemoryMap, pfn::Pfn},
 };
 
 pub const MAX_ORDER: usize = 10;
 
 pub struct Frames {
     metadata: Metadata,
-    free_lists: [Option<Pfn>; MAX_ORDER + 1],
-    free_pages: usize,
+    lists: FreeLists,
 }
 
 impl Frames {
@@ -32,8 +32,7 @@ impl Frames {
 
         let mut frames = Frames {
             metadata,
-            free_lists: [None; MAX_ORDER + 1],
-            free_pages: 0,
+            lists: FreeLists::empty(),
         };
 
         frames.seed(map);
@@ -42,22 +41,13 @@ impl Frames {
     }
 
     pub fn free_blocks(&self, order: usize) -> usize {
-        let mut count = 0;
-        let mut current = self.free_lists.get(order).copied().flatten();
-
-        while let Some(pfn) = current {
-            count += 1;
-            current = unsafe { pfn.read_links() }.next;
-        }
-
-        count
+        self.lists.blocks(order)
     }
 
     pub fn alloc(&mut self, order: usize) -> Option<Pfn> {
-        let mut available_order =
-            (order..=MAX_ORDER).find(|&o| self.free_lists.get(o).copied().flatten().is_some())?;
+        let mut available_order = (order..=MAX_ORDER).find(|&o| self.lists.head(o).is_some())?;
 
-        let pfn = self.pop(available_order)?;
+        let pfn = self.lists.pop(available_order)?;
 
         while available_order > order {
             available_order -= 1;
@@ -96,7 +86,7 @@ impl Frames {
                 break;
             }
 
-            self.unlink(buddy, order);
+            self.lists.unlink(buddy, order);
 
             pfn = pfn.min(buddy);
             order += 1;
@@ -121,24 +111,8 @@ impl Frames {
         }
     }
 
-    fn push(&mut self, pfn: Pfn, order: usize) -> Option<()> {
-        let head = self.free_lists.get_mut(order)?;
-        let current = *head;
-
-        unsafe {
-            pfn.write_links(Links {
-                prev: None,
-                next: current,
-            })
-        };
-
-        if let Some(current) = current {
-            let mut links = unsafe { current.read_links() };
-            links.prev = Some(pfn);
-            unsafe { current.write_links(links) };
-        }
-
-        *head = Some(pfn);
+    fn push(&mut self, pfn: Pfn, order: usize) {
+        self.lists.push(pfn, order);
 
         self.metadata.write(
             pfn,
@@ -147,39 +121,6 @@ impl Frames {
                 order: order as u8,
             },
         );
-
-        self.free_pages += 1 << order;
-
-        Some(())
-    }
-
-    fn pop(&mut self, order: usize) -> Option<Pfn> {
-        let pfn = (*self.free_lists.get(order)?)?;
-
-        self.unlink(pfn, order);
-        Some(pfn)
-    }
-
-    fn unlink(&mut self, pfn: Pfn, order: usize) {
-        let Links { prev, next } = unsafe { pfn.read_links() };
-
-        // Move prev to next and next to prev
-        if let Some(prev) = prev {
-            let mut links = unsafe { prev.read_links() };
-            links.next = next;
-            unsafe { prev.write_links(links) };
-        } else {
-            let head = self.free_lists.get_mut(order).unwrap();
-            *head = next;
-        }
-
-        if let Some(next) = next {
-            let mut links = unsafe { next.read_links() };
-            links.prev = prev;
-            unsafe { next.write_links(links) };
-        }
-
-        self.free_pages -= 1 << order;
     }
 }
 
@@ -188,7 +129,7 @@ impl Display for Frames {
         write!(
             f,
             "{} of {} pages free",
-            self.free_pages,
+            self.lists.pages(),
             self.metadata.pages()
         )
     }

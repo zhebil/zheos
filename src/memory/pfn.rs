@@ -1,5 +1,6 @@
 pub const PAGE_SIZE: usize = 4096;
 
+/// Page Frame Number
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pfn(pub usize);
 
@@ -34,12 +35,19 @@ impl Pfn {
         self.0 - base.0
     }
 
+    /// Get the buddy PFN for a given order.
+    pub fn buddy(self, order: usize) -> Self {
+        Self(self.0 ^ (1 << order))
+    }
+
+    // TODO: move out
     pub unsafe fn read_links(self) -> Links {
         let raw = unsafe { (self.to_addr() as *const [usize; 2]).read() };
 
         Links::decode(raw)
     }
 
+    // TODO: move out
     pub unsafe fn write_links(self, links: Links) {
         let raw = links.encode();
 

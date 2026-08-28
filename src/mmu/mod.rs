@@ -1,12 +1,12 @@
 use core::{fmt::Display, ptr::NonNull};
 
 use crate::{
-    frames::{Frames, pfn::PAGE_SIZE},
+    frames::Frames,
+    memory::{pfn::PAGE_SIZE, region::Region},
     mmu::{
         descriptor::{Descriptor, Kind},
         level::Level,
     },
-    region::Region,
 };
 
 pub mod descriptor;

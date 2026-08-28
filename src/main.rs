@@ -6,8 +6,8 @@ use core::{num::NonZeroU32, time::Duration};
 use crate::{
     board::{Board, Conduit},
     frames::{Frames, MAX_ORDER},
+    memory::region::Region,
     mmu::{Table, descriptor::Descriptor},
-    region::Region,
     uart::uart,
 };
 
@@ -45,11 +45,11 @@ mod gic;
 mod input;
 mod irq;
 mod lock;
+mod memory;
 mod mmio;
 mod mmu;
 mod print;
 mod psci;
-mod region;
 mod ring_buffer;
 mod timer;
 mod uart;

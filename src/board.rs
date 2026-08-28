@@ -1,6 +1,6 @@
 use crate::{
     dtb::{Dtb, Node},
-    region::Region,
+    memory::region::Region,
 };
 
 /// The one address that cannot come from the device tree, because it is what

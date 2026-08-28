@@ -1,4 +1,4 @@
-use crate::region::Region;
+use crate::memory::region::Region;
 
 use cursor::Cursor;
 use header::Header;

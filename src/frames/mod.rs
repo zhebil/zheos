@@ -1,16 +1,14 @@
-pub mod pfn;
 mod reservations;
 
 use core::{alloc::Layout, fmt::Display, ptr::NonNull};
-use pfn::Pfn;
 use reservations::Reservations;
 
 use crate::{
-    frames::{
-        pfn::{Links, PAGE_SIZE},
-        reservations::{PageRange, align_up},
+    frames::reservations::align_up,
+    memory::{
+        pfn::{Links, PAGE_SIZE, Pfn},
+        region::{PageRange, Region},
     },
-    region::Region,
 };
 
 pub const MAX_ORDER: usize = 10;

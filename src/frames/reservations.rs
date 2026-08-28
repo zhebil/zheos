@@ -1,36 +1,9 @@
 use core::alloc::Layout;
 
-use crate::{frames::pfn::Pfn, region::Region};
-
-pub struct PageRange {
-    // including
-    pub start: Pfn,
-    // excluding
-    pub end: Pfn,
-}
-
-impl PageRange {
-    pub fn new(region: Region, arena: Region) -> Option<Self> {
-        let base = region.base.max(arena.base);
-        let end = region.end().min(arena.end());
-        if base < end {
-            Some(Self {
-                start: Pfn::from_addr_down(base),
-                end: Pfn::from_addr_up(end),
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn contains(&self, pfn: Pfn) -> bool {
-        self.start <= pfn && pfn < self.end
-    }
-
-    fn overlaps(&self, other: &PageRange) -> bool {
-        self.start < other.end && other.start < self.end
-    }
-}
+use crate::{
+    memory::pfn::Pfn,
+    memory::region::{PageRange, Region},
+};
 
 pub struct Reservations<'a> {
     arena: Region,

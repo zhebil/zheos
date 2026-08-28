@@ -1,5 +1,5 @@
 use crate::dtb::cursor::Cursor;
-use crate::{dtb::Strings, region::Region};
+use crate::{dtb::Strings, memory::region::Region};
 
 // Defaults mandated by the spec for a node that declares neither.
 const DEFAULT_ADDRESS_CELLS: u32 = 2;

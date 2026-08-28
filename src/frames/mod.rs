@@ -1,8 +1,18 @@
+pub mod pfn;
+mod reservations;
+
 use core::{alloc::Layout, fmt::Display, ptr::NonNull};
+use pfn::Pfn;
+use reservations::Reservations;
 
-use crate::region::Region;
+use crate::{
+    frames::{
+        pfn::{Links, PAGE_SIZE},
+        reservations::{PageRange, align_up},
+    },
+    region::Region,
+};
 
-pub const PAGE_SIZE: usize = 4096;
 pub const MAX_ORDER: usize = 10;
 
 pub struct Frames {
@@ -28,11 +38,7 @@ impl Frames {
             size: end - base,
         };
 
-        let mut reservations = Reservations {
-            arena,
-            regions: reserved,
-            metadata: None,
-        };
+        let mut reservations = Reservations::new(arena, reserved);
 
         let layout = Layout::from_size_align(pages.next_multiple_of(PAGE_SIZE), PAGE_SIZE).ok()?;
         let metadata = reservations.reserve_metadata(layout)?;
@@ -233,79 +239,6 @@ impl Display for Frames {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Pfn(usize);
-
-impl Pfn {
-    const EMPTY_PATTERN: usize = usize::MAX;
-
-    pub fn to_addr(self) -> usize {
-        self.0 * PAGE_SIZE
-    }
-
-    fn from_addr_down(addr: usize) -> Self {
-        Self(addr / PAGE_SIZE)
-    }
-
-    fn from_addr_up(addr: usize) -> Self {
-        Self(addr.div_ceil(PAGE_SIZE))
-    }
-
-    fn offset(self, offset: usize) -> Self {
-        Self(self.0 + offset)
-    }
-
-    fn pages_until(self, end: Pfn) -> usize {
-        end.0 - self.0
-    }
-
-    fn alignment_order(self) -> usize {
-        self.0.trailing_zeros() as usize
-    }
-
-    fn index_from(self, base: Pfn) -> usize {
-        self.0 - base.0
-    }
-
-    unsafe fn read_links(self) -> Links {
-        let raw = unsafe { (self.to_addr() as *const [usize; 2]).read() };
-
-        Links::decode(raw)
-    }
-
-    unsafe fn write_links(self, links: Links) {
-        let raw = links.encode();
-
-        unsafe { (self.to_addr() as *mut [usize; 2]).write(raw) }
-    }
-}
-
-struct Links {
-    prev: Option<Pfn>,
-    next: Option<Pfn>,
-}
-
-impl Links {
-    fn encode(&self) -> [usize; 2] {
-        let prev = self.prev.map_or(Pfn::EMPTY_PATTERN, |pfn| pfn.0);
-        let next = self.next.map_or(Pfn::EMPTY_PATTERN, |pfn| pfn.0);
-        [prev, next]
-    }
-
-    fn decode(value: [usize; 2]) -> Self {
-        let prev = value[0];
-        let next = value[1];
-        Self {
-            prev: (prev != Pfn::EMPTY_PATTERN).then_some(Pfn(prev)),
-            next: (next != Pfn::EMPTY_PATTERN).then_some(Pfn(next)),
-        }
-    }
-}
-
-const fn align_up(addr: usize, align: usize) -> usize {
-    (addr + align - 1) & !(align - 1)
-}
-
 struct MetadataEntry {
     free: bool,
     order: u8, // 4 bits
@@ -321,128 +254,5 @@ impl MetadataEntry {
             free: (byte & 1) != 0,
             order: byte >> 1,
         }
-    }
-}
-
-pub struct PageRange {
-    // including
-    start: Pfn,
-    // excluding
-    end: Pfn,
-}
-
-impl PageRange {
-    fn new(region: Region, arena: Region) -> Option<Self> {
-        let base = region.base.max(arena.base);
-        let end = region.end().min(arena.end());
-        if base < end {
-            Some(Self {
-                start: Pfn::from_addr_down(base),
-                end: Pfn::from_addr_up(end),
-            })
-        } else {
-            None
-        }
-    }
-
-    fn contains(&self, pfn: Pfn) -> bool {
-        self.start <= pfn && pfn < self.end
-    }
-
-    fn overlaps(&self, other: &PageRange) -> bool {
-        self.start < other.end && other.start < self.end
-    }
-}
-
-struct Reservations<'a> {
-    arena: Region,
-    regions: &'a [Region],
-    metadata: Option<Region>,
-}
-
-impl Reservations<'_> {
-    fn reserve_metadata(&mut self, layout: Layout) -> Option<Region> {
-        let mut count = 0;
-        let mut next = self.arena.base;
-
-        loop {
-            // There could not be more jumps than reserved regions
-            if count > self.regions.len() {
-                return None;
-            }
-
-            count += 1;
-            let region = Region {
-                base: align_up(next, layout.align()),
-                size: layout.size(),
-            };
-
-            if region.end() > self.arena.end() {
-                return None;
-            }
-
-            let candidate = PageRange::new(region, self.arena)?;
-
-            if let Some(taken) = self.overlapping(&candidate) {
-                next = taken.end.to_addr();
-                continue;
-            }
-
-            self.metadata = Some(region);
-            return Some(region);
-        }
-    }
-
-    fn overlapping(&self, range: &PageRange) -> Option<PageRange> {
-        self.ranges().find(|other| other.overlaps(range))
-    }
-
-    fn ranges(&self) -> impl Iterator<Item = PageRange> {
-        let arena = self.arena;
-
-        self.regions
-            .iter()
-            .copied()
-            .chain(self.metadata)
-            .filter_map(move |region| PageRange::new(region, arena))
-    }
-
-    fn containing(&self, pfn: Pfn) -> Option<Pfn> {
-        self.ranges()
-            .find(|range| range.contains(pfn))
-            .map(|range| range.end)
-    }
-
-    fn next_base_above(&self, pfn: Pfn) -> Option<Pfn> {
-        self.ranges()
-            .filter(|range| range.start > pfn)
-            .map(|range| range.start)
-            .min()
-    }
-
-    fn free_runs(&self) -> impl Iterator<Item = PageRange> {
-        let mut cursor = Pfn::from_addr_up(self.arena.base);
-        let end = Pfn::from_addr_down(self.arena.end());
-
-        core::iter::from_fn(move || {
-            while let Some(stop) = self.containing(cursor) {
-                cursor = stop;
-            }
-
-            if cursor >= end {
-                return None;
-            }
-
-            let next_reserved = self.next_base_above(cursor).unwrap_or(end).min(end);
-
-            let run = PageRange {
-                start: cursor,
-                end: next_reserved,
-            };
-
-            cursor = run.end;
-
-            Some(run)
-        })
     }
 }

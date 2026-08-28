@@ -1,7 +1,7 @@
 use core::{fmt::Display, ptr::NonNull};
 
 use crate::{
-    frames::{Frames, PAGE_SIZE},
+    frames::{Frames, pfn::PAGE_SIZE},
     mmu::{
         descriptor::{Descriptor, Kind},
         level::Level,

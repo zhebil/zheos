@@ -6,7 +6,12 @@ use core::{alloc::Layout, num::NonZeroU32, time::Duration};
 use crate::{
     board::{Board, Conduit},
     frames::{Entry, Frames, MAX_ORDER},
-    memory::{image, map::MemoryMap, region::Region},
+    memory::{
+        image,
+        map::MemoryMap,
+        pfn::{PAGE_SIZE, Pfn},
+        region::Region,
+    },
     mmu::{Table, descriptor::Descriptor},
     uart::uart,
 };
@@ -169,6 +174,8 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         }
     }
 
+    slab_probe(&mut frames);
+
     let Some(mut table) = Table::new(&mut frames) else {
         println!("No room for a translation table");
         halt();
@@ -236,4 +243,100 @@ fn shutdown(conduit: Conduit) -> ! {
 
     println!("PSCI refused to power the machine off");
     halt()
+}
+
+fn print_slab_entry(frames: &Frames, pfn: Pfn) {
+    match frames.page(pfn) {
+        Entry::Slab {
+            free_head, in_use, ..
+        } => println!("entry: free_head {free_head} in_use {in_use}"),
+        Entry::Buddy { free, order } => println!("entry: buddy free {free} order {order}"),
+    }
+}
+
+fn slab_probe(frames: &mut Frames) {
+    let Some(page) = frames.alloc(0) else {
+        println!("slab: no page for the probe");
+        return;
+    };
+
+    for class in [0usize, 3, 8] {
+        if slab::init(frames, page, class).is_none() {
+            println!("slab: class index {class} is out of range");
+            continue;
+        }
+
+        let expected = PAGE_SIZE / slab::CLASSES[class];
+
+        match slab::chain_len(frames, page) {
+            Some(count) => println!(
+                "class {}: chain {count} of {expected}",
+                slab::CLASSES[class]
+            ),
+            None => println!("class {}: chain is malformed", slab::CLASSES[class]),
+        }
+    }
+
+    slab::init(frames, page, 3);
+
+    let mut slots = [0usize; 64];
+    let mut handed = 0;
+
+    while handed < slots.len() {
+        let Some(address) = slab::alloc(frames, page) else {
+            break;
+        };
+
+        slots[handed] = address;
+        unsafe { *(address as *mut u8) = handed as u8 };
+        handed += 1;
+    }
+
+    let full = slab::alloc(frames, page).is_none();
+    let mut wrong = 0;
+
+    for (i, &address) in slots[..handed].iter().enumerate() {
+        if unsafe { *(address as *const u8) } != i as u8 {
+            wrong += 1;
+        }
+    }
+
+    println!("class 64: handed {handed}, full {full}, wrong readbacks {wrong}");
+    print_slab_entry(frames, page);
+
+    let mut rejected = 0;
+
+    for address in [slots[0] + 1, page.to_addr() + PAGE_SIZE, page.to_addr() - 8] {
+        if slab::free(frames, page, address).is_none() {
+            rejected += 1;
+        }
+    }
+
+    if slab::free(frames, page, slots[0]).is_some() && slab::free(frames, page, slots[0]).is_none()
+    {
+        rejected += 1;
+    }
+
+    let mut refused = 0;
+
+    for &address in slots[1..handed].iter() {
+        if slab::free(frames, page, address).is_none() {
+            refused += 1;
+        }
+    }
+
+    if slab::free(frames, page, slots[0]).is_none() {
+        rejected += 1;
+    }
+
+    println!("class 64: bogus frees rejected {rejected} of 5, good frees refused {refused}");
+
+    match slab::chain_len(frames, page) {
+        Some(count) => println!("class 64: chain {count} after freeing all"),
+        None => println!("class 64: chain is malformed after freeing"),
+    }
+
+    print_slab_entry(frames, page);
+
+    frames.free(page);
 }

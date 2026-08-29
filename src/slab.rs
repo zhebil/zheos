@@ -64,3 +64,122 @@ pub fn init(frames: &mut Frames, page_pfn: Pfn, class_idx: usize) -> Option<()> 
 
     Some(())
 }
+
+pub fn alloc(frames: &mut Frames, pfn: Pfn) -> Option<usize> {
+    match frames.page(pfn) {
+        Entry::Slab {
+            class,
+            free_head,
+            in_use,
+            next_partial,
+            prev_partial,
+        } => {
+            // No free space
+            if free_head == FREE_HEAD_EMPTY_VALUE {
+                return None;
+            }
+
+            let head = free_head;
+            let size = CLASSES.get(class as usize)?;
+
+            if head as usize >= PAGE_SIZE / size {
+                return None;
+            }
+
+            let address = pfn.to_addr() + head as usize * size;
+            let next_free_head = unsafe { *(address as *mut u16) };
+
+            frames.set_page(
+                pfn,
+                Entry::Slab {
+                    class,
+                    free_head: next_free_head,
+                    in_use: in_use + 1,
+                    next_partial,
+                    prev_partial,
+                },
+            );
+
+            Some(address)
+        }
+        // It is not a slab page
+        Entry::Buddy { .. } => None,
+    }
+}
+
+pub fn free(frames: &mut Frames, pfn: Pfn, address: usize) -> Option<()> {
+    let Entry::Slab {
+        class,
+        free_head,
+        in_use,
+        next_partial,
+        prev_partial,
+    } = frames.page(pfn)
+    else {
+        return None;
+    };
+
+    let size = CLASSES.get(class as usize)?;
+    let base = pfn.to_addr();
+
+    // Make sure address is inside the slab page
+    if address < base {
+        return None;
+    }
+
+    let offset = address - base;
+
+    if offset >= PAGE_SIZE || !offset.is_multiple_of(*size) {
+        return None;
+    }
+
+    let idx = (offset / size) as u16;
+
+    // Make sure the slot is not already freed or empty
+    if in_use == 0 || idx == free_head {
+        return None;
+    }
+
+    // Make the freed slot point to the previous free slot
+    unsafe { (*(address as *mut u16)) = free_head };
+
+    frames.set_page(
+        pfn,
+        Entry::Slab {
+            class,
+            free_head: idx,
+            in_use: in_use - 1,
+            next_partial,
+            prev_partial,
+        },
+    );
+
+    Some(())
+}
+
+pub fn chain_len(frames: &Frames, pfn: Pfn) -> Option<usize> {
+    let Entry::Slab {
+        class, free_head, ..
+    } = frames.page(pfn)
+    else {
+        return None;
+    };
+
+    let size = CLASSES.get(class as usize)?;
+    let slots = PAGE_SIZE / size;
+    let base = pfn.to_addr();
+
+    let mut index = free_head;
+    let mut count = 0;
+
+    while index != FREE_HEAD_EMPTY_VALUE {
+        if index as usize >= slots || count == slots {
+            return None;
+        }
+
+        index = unsafe { *((base + index as usize * size) as *const u16) };
+        count += 1;
+    }
+
+    Some(count)
+}

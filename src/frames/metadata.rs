@@ -13,7 +13,7 @@ pub struct Metadata {
 
 const METADATA_ENTRY_SIZE: usize = 8;
 
-const MAX_ARENA_PAGES: usize = 1 << 19;
+const MAX_ARENA_PAGES: usize = (1 << 19) - 1;
 
 // 1 extra bit reserved to distinguish between buddy and slab entries
 pub enum Entry {

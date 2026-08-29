@@ -7,7 +7,7 @@ pub use metadata::Entry;
 
 use crate::{
     frames::{lists::FreeLists, metadata::Metadata},
-    memory::{map::MemoryMap, pfn::Pfn},
+    memory::{map::MemoryMap, pfn::Pfn, region::Region},
 };
 
 pub const MAX_ORDER: usize = 10;
@@ -15,6 +15,7 @@ pub const MAX_ORDER: usize = 10;
 pub struct Frames {
     metadata: Metadata,
     lists: FreeLists,
+    arena: Region,
 }
 
 impl Frames {
@@ -32,6 +33,7 @@ impl Frames {
         let mut frames = Frames {
             metadata,
             lists: FreeLists::empty(),
+            arena: map.arena(),
         };
 
         frames.seed(map);
@@ -105,6 +107,10 @@ impl Frames {
         }
 
         self.push(pfn, order);
+    }
+
+    pub fn arena_base(&self) -> usize {
+        self.arena.base
     }
 
     fn seed(&mut self, map: &MemoryMap) {

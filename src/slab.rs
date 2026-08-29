@@ -5,7 +5,7 @@ use crate::{
     memory::pfn::{PAGE_SIZE, Pfn},
 };
 
-const CLASSES_COUNT: usize = 9; // 8, 16, 32, 64, 128, 256, 512, 1024, 2048
+pub const CLASSES_COUNT: usize = 9; // 8, 16, 32, 64, 128, 256, 512, 1024, 2048
 
 pub const CLASSES: [usize; CLASSES_COUNT] = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
@@ -182,4 +182,199 @@ pub fn chain_len(frames: &Frames, pfn: Pfn) -> Option<usize> {
     }
 
     Some(count)
+}
+
+pub struct Cache {
+    pub heads: [Option<Pfn>; CLASSES_COUNT],
+}
+
+impl Cache {
+    pub fn alloc(&mut self, frames: &mut Frames, class_idx: usize) -> Option<usize> {
+        let head = self.heads.get(class_idx)?;
+        let head = match *head {
+            Some(head) => head,
+            None => {
+                let page_pfn = frames.alloc(0)?;
+                init(frames, page_pfn, class_idx)?;
+                self.heads[class_idx] = Some(page_pfn);
+                page_pfn
+            }
+        };
+
+        let address = alloc(frames, head)?;
+
+        let Entry::Slab { free_head, .. } = frames.page(head) else {
+            return None;
+        };
+
+        if free_head == FREE_HEAD_EMPTY_VALUE {
+            self.pop(frames, class_idx)?;
+        };
+
+        Some(address)
+    }
+
+    pub fn free(&mut self, frames: &mut Frames, address: usize) -> Option<()> {
+        let page = address & !0xFFF;
+        let pfn = Pfn::from_addr_down(page);
+
+        let Entry::Slab {
+            free_head, class, ..
+        } = frames.page(pfn)
+        else {
+            return None;
+        };
+
+        free(frames, pfn, address)?;
+
+        if free_head == FREE_HEAD_EMPTY_VALUE {
+            self.push(frames, class as usize, pfn)?;
+        }
+
+        let Entry::Slab { in_use, .. } = frames.page(pfn) else {
+            return None;
+        };
+
+        if in_use == 0 {
+            self.unlink(frames, pfn);
+            frames.free(pfn);
+        }
+
+        Some(())
+    }
+
+    fn links(frames: &mut Frames, pfn: Pfn) -> (Option<Pfn>, Option<Pfn>) {
+        let Entry::Slab {
+            next_partial,
+            prev_partial,
+            ..
+        } = frames.page(pfn)
+        else {
+            return (None, None);
+        };
+
+        let arena_base = frames.arena_base();
+        let prev_partial = if prev_partial != LINK_SLOT_EMPTY_VALUE {
+            Some(Pfn::from_addr_up(arena_base).offset(prev_partial as usize))
+        } else {
+            None
+        };
+
+        let next_partial = if next_partial != LINK_SLOT_EMPTY_VALUE {
+            Some(Pfn::from_addr_up(arena_base).offset(next_partial as usize))
+        } else {
+            None
+        };
+
+        (next_partial, prev_partial)
+    }
+
+    fn set_next(&mut self, frames: &mut Frames, pfn: Pfn, value: Option<Pfn>) {
+        let Entry::Slab {
+            class,
+            free_head,
+            in_use,
+            prev_partial,
+            ..
+        } = frames.page(pfn)
+        else {
+            return;
+        };
+
+        let arena_base = frames.arena_base();
+        let next_partial = match value {
+            Some(pfn) => pfn.index_from(Pfn::from_addr_up(arena_base)) as u32,
+            None => LINK_SLOT_EMPTY_VALUE,
+        };
+
+        frames.set_page(
+            pfn,
+            Entry::Slab {
+                class,
+                free_head,
+                in_use,
+                next_partial,
+                prev_partial,
+            },
+        );
+    }
+
+    fn set_prev(&mut self, frames: &mut Frames, pfn: Pfn, value: Option<Pfn>) {
+        let Entry::Slab {
+            class,
+            free_head,
+            in_use,
+            next_partial,
+            prev_partial: _,
+        } = frames.page(pfn)
+        else {
+            return;
+        };
+
+        let arena_base = frames.arena_base();
+        let prev_partial = match value {
+            Some(pfn) => pfn.index_from(Pfn::from_addr_up(arena_base)) as u32,
+            None => LINK_SLOT_EMPTY_VALUE,
+        };
+
+        frames.set_page(
+            pfn,
+            Entry::Slab {
+                class,
+                free_head,
+                in_use,
+                next_partial,
+                prev_partial,
+            },
+        );
+    }
+
+    fn push(&mut self, frames: &mut Frames, class_idx: usize, new_pfn: Pfn) -> Option<()> {
+        let head = *self.heads.get(class_idx)?;
+
+        self.set_next(frames, new_pfn, head);
+        self.set_prev(frames, new_pfn, None);
+
+        if let Some(head) = head {
+            self.set_prev(frames, head, Some(new_pfn));
+        }
+
+        self.heads[class_idx] = Some(new_pfn);
+
+        Some(())
+    }
+
+    fn unlink(&mut self, frames: &mut Frames, pfn: Pfn) -> Option<()> {
+        let Entry::Slab { class, .. } = frames.page(pfn) else {
+            return None;
+        };
+
+        let class_idx = class as usize;
+        let (next, prev) = Cache::links(frames, pfn);
+
+        if let Some(prev) = prev {
+            self.set_next(frames, prev, next);
+        } else if self.heads.get(class_idx).copied().flatten() == Some(pfn) {
+            self.heads[class_idx] = next;
+        } else {
+            return None;
+        }
+
+        if let Some(next) = next {
+            self.set_prev(frames, next, prev);
+        }
+
+        self.set_next(frames, pfn, None);
+        self.set_prev(frames, pfn, None);
+
+        Some(())
+    }
+
+    fn pop(&mut self, frames: &mut Frames, class_idx: usize) -> Option<Pfn> {
+        let head = self.heads.get(class_idx).cloned().flatten()?;
+
+        self.unlink(frames, head);
+
+        Some(head)
+    }
 }

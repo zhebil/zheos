@@ -176,6 +176,8 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     slab_probe(&mut frames);
 
+    cache_probe(&mut frames);
+
     let Some(mut table) = Table::new(&mut frames) else {
         println!("No room for a translation table");
         halt();
@@ -339,4 +341,100 @@ fn slab_probe(frames: &mut Frames) {
     print_slab_entry(frames, page);
 
     frames.free(page);
+}
+
+fn cache_run(
+    cache: &mut slab::Cache,
+    frames: &mut Frames,
+    slots: &mut [usize],
+    class: usize,
+) -> usize {
+    let mut handed = 0;
+
+    while handed < slots.len() {
+        let Some(address) = cache.alloc(frames, class) else {
+            break;
+        };
+
+        slots[handed] = address;
+        handed += 1;
+    }
+
+    handed
+}
+
+fn cache_probe(frames: &mut Frames) {
+    let mut cache = slab::Cache {
+        heads: [None; slab::CLASSES_COUNT],
+    };
+
+    let mut slots = [0usize; 192];
+
+    println!("cache: start          {frames}");
+
+    let handed = cache_run(&mut cache, frames, &mut slots[..64], 3);
+    println!("cache: {handed} live         {frames}");
+
+    let mut refused = 0;
+
+    for &address in slots[..handed].iter() {
+        if cache.free(frames, address).is_none() {
+            refused += 1;
+        }
+    }
+
+    println!("cache: 0 live         {frames}, refused {refused}");
+
+    let handed = cache_run(&mut cache, frames, &mut slots[..64], 3);
+
+    for &address in slots[..handed - 1].iter() {
+        if cache.free(frames, address).is_none() {
+            refused += 1;
+        }
+    }
+
+    println!("cache: 1 live         {frames}");
+
+    if cache.free(frames, slots[handed - 1]).is_none() {
+        refused += 1;
+    }
+
+    println!("cache: 0 live         {frames}");
+
+    let handed = cache_run(&mut cache, frames, &mut slots[..128], 3);
+    println!("cache: {handed} live        {frames}");
+
+    for &address in slots[..handed].iter() {
+        if cache.free(frames, address).is_none() {
+            refused += 1;
+        }
+    }
+
+    println!("cache: 0 live         {frames}, refused {refused}");
+
+    let handed = cache_run(&mut cache, frames, &mut slots, 3);
+    println!("cache: {handed} live        {frames}");
+
+    for i in [0usize, 64, 128] {
+        if cache.free(frames, slots[i]).is_none() {
+            refused += 1;
+        }
+    }
+
+    for &address in slots[65..128].iter() {
+        if cache.free(frames, address).is_none() {
+            refused += 1;
+        }
+    }
+
+    println!("cache: middle empty   {frames}");
+
+    for &address in slots[1..64].iter().chain(slots[129..].iter()) {
+        if cache.free(frames, address).is_none() {
+            refused += 1;
+        }
+    }
+
+    println!("cache: 0 live         {frames}, refused {refused}");
+    println!("cache: head is none   {}", cache.heads[3].is_none());
 }

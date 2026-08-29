@@ -56,7 +56,7 @@ impl Frames {
 
         self.metadata.write(
             pfn,
-            Entry {
+            Entry::Buddy {
                 free: false,
                 order: order as u8,
             },
@@ -67,11 +67,16 @@ impl Frames {
 
     pub fn free(&mut self, mut pfn: Pfn) {
         let entry = self.metadata.read(pfn);
-        if entry.free {
+
+        let Entry::Buddy { free, order } = entry else {
+            unreachable!()
+        };
+
+        if free {
             return;
         }
 
-        let mut order = entry.order as usize;
+        let mut order = order as usize;
 
         while order < MAX_ORDER {
             let buddy = pfn.buddy(order);
@@ -82,7 +87,15 @@ impl Frames {
 
             let buddy_entry = self.metadata.read(buddy);
 
-            if !buddy_entry.free || buddy_entry.order != order as u8 {
+            let Entry::Buddy {
+                free,
+                order: buddy_order,
+            } = buddy_entry
+            else {
+                unreachable!()
+            };
+
+            if !free || buddy_order != order as u8 {
                 break;
             }
 
@@ -116,7 +129,7 @@ impl Frames {
 
         self.metadata.write(
             pfn,
-            Entry {
+            Entry::Buddy {
                 free: true,
                 order: order as u8,
             },

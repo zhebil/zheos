@@ -11,9 +11,21 @@ pub struct Metadata {
     pages: usize,
 }
 
-pub struct Entry {
-    pub free: bool,
-    pub order: u8, // 4 bits
+const METADATA_ENTRY_SIZE: usize = 8;
+
+// 1 extra bit reserved to distinguish between buddy and slab entries
+pub enum Entry {
+    Buddy {
+        free: bool, // 1 bit
+        order: u8,  // 4 bits
+    },
+    Slab {
+        class: u8,         // 4 bits
+        free_head: u16,    // 10 bits
+        in_use: u16,       // 10 bits
+        next_partial: u16, // 19 bits
+        prev_partial: u16, // 19 bits
+    },
 }
 
 impl Metadata {
@@ -41,6 +53,14 @@ impl Metadata {
         })
     }
 
+    pub fn get_page(&self, pfn: Pfn) -> Entry {
+        self.read(pfn)
+    }
+
+    pub fn set_page(&mut self, pfn: Pfn, entry: Entry) {
+        self.write(pfn, entry);
+    }
+
     pub fn pages(&self) -> usize {
         self.pages
     }
@@ -53,34 +73,64 @@ impl Metadata {
     }
 
     pub fn read(&self, pfn: Pfn) -> Entry {
-        Entry::from_byte(unsafe { self.byte(pfn).read() })
+        Entry::from_u64(unsafe { self.entry(pfn).read() })
     }
 
     pub fn write(&mut self, pfn: Pfn, entry: Entry) {
-        unsafe { self.byte(pfn).write(entry.to_byte()) }
+        unsafe { self.entry(pfn).write(entry.to_u64()) }
     }
 
     pub fn required_size(arena: Region) -> usize {
-        (arena.size / PAGE_SIZE).div_ceil(PAGE_SIZE)
+        (arena.size / PAGE_SIZE * METADATA_ENTRY_SIZE).div_ceil(PAGE_SIZE)
     }
 
-    fn byte(&self, pfn: Pfn) -> *mut u8 {
+    fn entry(&self, pfn: Pfn) -> *mut u64 {
         // SAFETY: in range for any pfn inside `covers`, which is every pfn that
         // reaches here - the free lists only ever hold arena pages, and `free`
         // tests a buddy against `covers` before looking it up.
-        unsafe { (self.region.base as *mut u8).add(pfn.index_from(self.base)) }
+        unsafe { (self.region.base as *mut u64).add(pfn.index_from(self.base)) }
     }
 }
 
 impl Entry {
-    fn to_byte(&self) -> u8 {
-        (self.free as u8) | (self.order << 1)
+    fn to_u64(&self) -> u64 {
+        match self {
+            Entry::Buddy { free, order } => {
+                (false as u64) | ((*free as u64) << 1) | ((*order as u64) << 2)
+            }
+            Entry::Slab {
+                class,
+                free_head,
+                in_use,
+                next_partial,
+                prev_partial,
+            } => {
+                (true as u64)
+                    | ((*class as u64) << 1)
+                    | ((*free_head as u64) << 5)
+                    | ((*in_use as u64) << 15)
+                    | ((*next_partial as u64) << 25)
+                    | ((*prev_partial as u64) << 44)
+            }
+        }
     }
 
-    fn from_byte(byte: u8) -> Self {
-        Self {
-            free: (byte & 1) != 0,
-            order: byte >> 1,
+    fn from_u64(val: u64) -> Self {
+        let is_slab = (val & 1) != 0;
+
+        if is_slab {
+            Self::Slab {
+                class: ((val >> 1) & 0xF) as u8,
+                free_head: ((val >> 5) & 0x3FF) as u16,
+                in_use: ((val >> 15) & 0x3FF) as u16,
+                next_partial: ((val >> 25) & 0x7FFFF) as u16,
+                prev_partial: ((val >> 44) & 0x7FFFF) as u16,
+            }
+        } else {
+            Self::Buddy {
+                free: (val & 2) != 0,
+                order: ((val >> 2) & 0xF) as u8,
+            }
         }
     }
 }

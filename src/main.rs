@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use core::{num::NonZeroU32, time::Duration};
+use core::{alloc::Layout, num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
@@ -51,6 +51,7 @@ mod mmu;
 mod print;
 mod psci;
 mod ring_buffer;
+mod slab;
 mod timer;
 mod uart;
 mod zhemon;
@@ -156,6 +157,17 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     frames.free(page);
 
     println!("frames: {frames}");
+
+    for (size, align) in [(1usize, 1usize), (65, 1), (100, 1), (2049, 1), (1, 64)] {
+        let Ok(layout) = Layout::from_size_align(size, align) else {
+            continue;
+        };
+
+        match slab::class_of(layout) {
+            Some(index) => println!("class_of({size}, {align}) = {}", slab::CLASSES[index]),
+            None => println!("class_of({size}, {align}) = none"),
+        }
+    }
 
     let Some(mut table) = Table::new(&mut frames) else {
         println!("No room for a translation table");

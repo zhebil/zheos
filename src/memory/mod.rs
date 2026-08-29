@@ -1,4 +1,5 @@
 pub mod map;
+pub mod pages;
 pub mod pfn;
 pub mod region;
 

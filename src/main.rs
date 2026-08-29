@@ -5,10 +5,11 @@ use core::{alloc::Layout, num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
-    frames::{Entry, Frames, MAX_ORDER},
+    frames::{Frames, MAX_ORDER},
     memory::{
         image,
         map::MemoryMap,
+        pages::{Entry, Pages},
         pfn::{PAGE_SIZE, Pfn},
         region::Region,
     },
@@ -109,10 +110,12 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         halt();
     }
 
-    let Some(mut frames) = Frames::new(&mut map) else {
+    let Some(mut pages) = Pages::new(&mut map) else {
         println!("No room for the page metadata, or the arena is too large to index");
         halt();
     };
+
+    let mut frames = Frames::new(&map, &mut pages);
 
     for region in map.reserved() {
         println!("reserved: {region}");
@@ -128,14 +131,14 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     println!("frames: {frames}");
 
-    let Some(page) = frames.alloc(0) else {
+    let Some(page) = frames.alloc(&mut pages, 0) else {
         println!("No page to allocate");
         halt();
     };
 
     println!("alloc(0): {:#012x}", page.to_addr());
 
-    frames.set_page(
+    pages.write(
         page,
         Entry::Slab {
             class: 0xF,
@@ -146,7 +149,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         },
     );
 
-    match frames.page(page) {
+    match pages.read(page) {
         Entry::Slab {
             class,
             free_head,
@@ -159,7 +162,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         Entry::Buddy { free, order } => println!("buddy entry: free {free} order {order}"),
     }
 
-    frames.free(page);
+    frames.free(&mut pages, page);
 
     println!("frames: {frames}");
 
@@ -174,13 +177,13 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         }
     }
 
-    slab_probe(&mut frames);
+    slab_probe(&mut pages, &mut frames);
 
-    cache_probe(&mut frames);
+    cache_probe(&mut pages, &mut frames);
 
-    layout_probe(&mut frames);
+    layout_probe(&mut pages, &mut frames);
 
-    let Some(mut table) = Table::new(&mut frames) else {
+    let Some(mut table) = Table::new(&mut frames, &mut pages) else {
         println!("No room for a translation table");
         halt();
     };
@@ -193,12 +196,19 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     // Halting on failure rather than carrying on: a half-built table is worse
     // than a stop, because the next step turns the MMU on and walks it.
-    if let Err(error) = table.identity_map(&mut frames, devices, Descriptor::DEVICE_BLOCK) {
+    if let Err(error) =
+        table.identity_map(&mut frames, &mut pages, devices, Descriptor::DEVICE_BLOCK)
+    {
         println!("Failed to map devices: {error}");
         halt();
     }
 
-    if let Err(error) = table.identity_map(&mut frames, board.memory, Descriptor::NORMAL_BLOCK) {
+    if let Err(error) = table.identity_map(
+        &mut frames,
+        &mut pages,
+        board.memory,
+        Descriptor::NORMAL_BLOCK,
+    ) {
         println!("Failed to map memory: {error}");
         halt();
     }
@@ -249,8 +259,8 @@ fn shutdown(conduit: Conduit) -> ! {
     halt()
 }
 
-fn print_slab_entry(frames: &Frames, pfn: Pfn) {
-    match frames.page(pfn) {
+fn print_slab_entry(pages: &Pages, pfn: Pfn) {
+    match pages.read(pfn) {
         Entry::Slab {
             free_head, in_use, ..
         } => println!("entry: free_head {free_head} in_use {in_use}"),
@@ -258,21 +268,21 @@ fn print_slab_entry(frames: &Frames, pfn: Pfn) {
     }
 }
 
-fn slab_probe(frames: &mut Frames) {
-    let Some(page) = frames.alloc(0) else {
+fn slab_probe(pages: &mut Pages, frames: &mut Frames) {
+    let Some(page) = frames.alloc(pages, 0) else {
         println!("slab: no page for the probe");
         return;
     };
 
     for class in [0usize, 3, 8] {
-        if slab::init(frames, page, class).is_none() {
+        if slab::init(pages, page, class).is_none() {
             println!("slab: class index {class} is out of range");
             continue;
         }
 
         let expected = PAGE_SIZE / slab::CLASSES[class];
 
-        match slab::chain_len(frames, page) {
+        match slab::chain_len(pages, page) {
             Some(count) => println!(
                 "class {}: chain {count} of {expected}",
                 slab::CLASSES[class]
@@ -281,13 +291,13 @@ fn slab_probe(frames: &mut Frames) {
         }
     }
 
-    slab::init(frames, page, 3);
+    slab::init(pages, page, 3);
 
     let mut slots = [0usize; 64];
     let mut handed = 0;
 
     while handed < slots.len() {
-        let Some(address) = slab::alloc(frames, page) else {
+        let Some(address) = slab::alloc(pages, page) else {
             break;
         };
 
@@ -296,7 +306,7 @@ fn slab_probe(frames: &mut Frames) {
         handed += 1;
     }
 
-    let full = slab::alloc(frames, page).is_none();
+    let full = slab::alloc(pages, page).is_none();
     let mut wrong = 0;
 
     for (i, &address) in slots[..handed].iter().enumerate() {
@@ -306,46 +316,45 @@ fn slab_probe(frames: &mut Frames) {
     }
 
     println!("class 64: handed {handed}, full {full}, wrong readbacks {wrong}");
-    print_slab_entry(frames, page);
+    print_slab_entry(pages, page);
 
     let mut rejected = 0;
 
     for address in [slots[0] + 1, page.to_addr() + PAGE_SIZE, page.to_addr() - 8] {
-        if slab::free(frames, page, address).is_none() {
+        if slab::free(pages, page, address).is_none() {
             rejected += 1;
         }
     }
 
-    if slab::free(frames, page, slots[0]).is_some() && slab::free(frames, page, slots[0]).is_none()
-    {
+    if slab::free(pages, page, slots[0]).is_some() && slab::free(pages, page, slots[0]).is_none() {
         rejected += 1;
     }
 
     let mut refused = 0;
 
     for &address in slots[1..handed].iter() {
-        if slab::free(frames, page, address).is_none() {
+        if slab::free(pages, page, address).is_none() {
             refused += 1;
         }
     }
 
-    if slab::free(frames, page, slots[0]).is_none() {
+    if slab::free(pages, page, slots[0]).is_none() {
         rejected += 1;
     }
 
     println!("class 64: bogus frees rejected {rejected} of 5, good frees refused {refused}");
 
-    match slab::chain_len(frames, page) {
+    match slab::chain_len(pages, page) {
         Some(count) => println!("class 64: chain {count} after freeing all"),
         None => println!("class 64: chain is malformed after freeing"),
     }
 
-    print_slab_entry(frames, page);
+    print_slab_entry(pages, page);
 
-    frames.free(page);
+    frames.free(pages, page);
 }
 
-fn layout_probe(frames: &mut Frames) {
+fn layout_probe(pages: &mut Pages, frames: &mut Frames) {
     let mut cache = slab::Cache {
         heads: [None; slab::CLASSES_COUNT],
     };
@@ -356,21 +365,21 @@ fn layout_probe(frames: &mut Frames) {
 
     println!("layout: start         {frames}");
 
-    let Some(a) = cache.alloc_layout(frames, three_k) else {
+    let Some(a) = cache.alloc_layout(pages, frames, three_k) else {
         println!("layout: 3000 refused");
         return;
     };
 
     println!("layout: 3000 live     {frames}, at {a:#012x}");
 
-    let Some(b) = cache.alloc_layout(frames, nine_k) else {
+    let Some(b) = cache.alloc_layout(pages, frames, nine_k) else {
         println!("layout: 9000 refused");
         return;
     };
 
     println!("layout: 9000 live     {frames}, at {b:#012x}");
 
-    let Some(c) = cache.alloc_layout(frames, small) else {
+    let Some(c) = cache.alloc_layout(pages, frames, small) else {
         println!("layout: 64 refused");
         return;
     };
@@ -380,7 +389,7 @@ fn layout_probe(frames: &mut Frames) {
     let mut refused = 0;
 
     for (address, layout) in [(c, small), (b, nine_k), (a, three_k)] {
-        if cache.free_layout(frames, address, layout).is_none() {
+        if cache.free_layout(pages, frames, address, layout).is_none() {
             refused += 1;
         }
     }
@@ -390,6 +399,7 @@ fn layout_probe(frames: &mut Frames) {
 
 fn cache_run(
     cache: &mut slab::Cache,
+    pages: &mut Pages,
     frames: &mut Frames,
     slots: &mut [usize],
     layout: Layout,
@@ -397,7 +407,7 @@ fn cache_run(
     let mut handed = 0;
 
     while handed < slots.len() {
-        let Some(address) = cache.alloc_layout(frames, layout) else {
+        let Some(address) = cache.alloc_layout(pages, frames, layout) else {
             break;
         };
 
@@ -408,7 +418,7 @@ fn cache_run(
     handed
 }
 
-fn cache_probe(frames: &mut Frames) {
+fn cache_probe(pages: &mut Pages, frames: &mut Frames) {
     let mut cache = slab::Cache {
         heads: [None; slab::CLASSES_COUNT],
     };
@@ -418,23 +428,23 @@ fn cache_probe(frames: &mut Frames) {
 
     println!("cache: start          {frames}");
 
-    let handed = cache_run(&mut cache, frames, &mut slots[..64], layout);
+    let handed = cache_run(&mut cache, pages, frames, &mut slots[..64], layout);
     println!("cache: {handed} live         {frames}");
 
     let mut refused = 0;
 
     for &address in slots[..handed].iter() {
-        if cache.free_layout(frames, address, layout).is_none() {
+        if cache.free_layout(pages, frames, address, layout).is_none() {
             refused += 1;
         }
     }
 
     println!("cache: 0 live         {frames}, refused {refused}");
 
-    let handed = cache_run(&mut cache, frames, &mut slots[..64], layout);
+    let handed = cache_run(&mut cache, pages, frames, &mut slots[..64], layout);
 
     for &address in slots[..handed - 1].iter() {
-        if cache.free_layout(frames, address, layout).is_none() {
+        if cache.free_layout(pages, frames, address, layout).is_none() {
             refused += 1;
         }
     }
@@ -442,7 +452,7 @@ fn cache_probe(frames: &mut Frames) {
     println!("cache: 1 live         {frames}");
 
     if cache
-        .free_layout(frames, slots[handed - 1], layout)
+        .free_layout(pages, frames, slots[handed - 1], layout)
         .is_none()
     {
         refused += 1;
@@ -450,28 +460,28 @@ fn cache_probe(frames: &mut Frames) {
 
     println!("cache: 0 live         {frames}");
 
-    let handed = cache_run(&mut cache, frames, &mut slots[..128], layout);
+    let handed = cache_run(&mut cache, pages, frames, &mut slots[..128], layout);
     println!("cache: {handed} live        {frames}");
 
     for &address in slots[..handed].iter() {
-        if cache.free_layout(frames, address, layout).is_none() {
+        if cache.free_layout(pages, frames, address, layout).is_none() {
             refused += 1;
         }
     }
 
     println!("cache: 0 live         {frames}, refused {refused}");
 
-    let handed = cache_run(&mut cache, frames, &mut slots, layout);
+    let handed = cache_run(&mut cache, pages, frames, &mut slots, layout);
     println!("cache: {handed} live        {frames}");
 
     for i in [0usize, 64, 128] {
-        if cache.free_layout(frames, slots[i], layout).is_none() {
+        if cache.free_layout(pages, frames, slots[i], layout).is_none() {
             refused += 1;
         }
     }
 
     for &address in slots[65..128].iter() {
-        if cache.free_layout(frames, address, layout).is_none() {
+        if cache.free_layout(pages, frames, address, layout).is_none() {
             refused += 1;
         }
     }
@@ -479,7 +489,7 @@ fn cache_probe(frames: &mut Frames) {
     println!("cache: middle empty   {frames}");
 
     for &address in slots[1..64].iter().chain(slots[129..].iter()) {
-        if cache.free_layout(frames, address, layout).is_none() {
+        if cache.free_layout(pages, frames, address, layout).is_none() {
             refused += 1;
         }
     }

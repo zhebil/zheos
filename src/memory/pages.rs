@@ -1,17 +1,18 @@
 use core::ptr::NonNull;
 
 use crate::memory::{
+    map::MemoryMap,
     pfn::{PAGE_SIZE, Pfn},
     region::{PageRange, Region},
 };
 
-pub struct Metadata {
-    pub region: Region,
+pub struct Pages {
+    region: Region,
     base: Pfn,
-    pages: usize,
+    len: usize,
 }
 
-const METADATA_ENTRY_SIZE: usize = 8;
+const ENTRY_SIZE: usize = 8;
 
 const MAX_ARENA_PAGES: usize = (1 << 19) - 1;
 
@@ -30,52 +31,63 @@ pub enum Entry {
     },
 }
 
-impl Metadata {
-    pub fn new(arena: Region, storage: Pfn) -> Option<Metadata> {
-        let pages = arena.size / PAGE_SIZE;
+impl Pages {
+    pub fn new(map: &mut MemoryMap) -> Option<Pages> {
+        let arena = map.arena();
+        let len = arena.size / PAGE_SIZE;
 
-        if pages == 0 || pages > MAX_ARENA_PAGES {
+        if len == 0 || len > MAX_ARENA_PAGES {
             return None;
         }
 
+        let needed = Self::required_size(arena);
+        let run = map.unreserved().find(|run| run.pages() >= needed)?;
+
         let region = Region {
-            base: storage.to_addr(),
-            size: Self::required_size(arena) * PAGE_SIZE,
+            base: run.start.to_addr(),
+            size: needed * PAGE_SIZE,
         };
 
         let start = NonNull::new(region.base as *mut u8)?;
 
-        // SAFETY: Caller ensures that it owns all pages within the metadata region.
+        // SAFETY: the run came from the map's unreserved list, so nothing else
+        // owns these pages, and the reserve below keeps it that way.
         unsafe { start.write_bytes(0, region.size) };
 
-        Some(Metadata {
+        map.reserve(region).ok()?;
+
+        Some(Pages {
             region,
             base: Pfn::from_addr_down(arena.base),
-            pages,
+            len,
         })
     }
 
-    pub fn pages(&self) -> usize {
-        self.pages
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn base(&self) -> Pfn {
+        self.base
     }
 
     pub fn covers(&self) -> PageRange {
         PageRange {
             start: self.base,
-            end: self.base.offset(self.pages),
+            end: self.base.offset(self.len),
         }
     }
 
-    pub(super) fn read(&self, pfn: Pfn) -> Entry {
+    pub fn read(&self, pfn: Pfn) -> Entry {
         Entry::from_u64(unsafe { self.entry(pfn).read() })
     }
 
-    pub(super) fn write(&mut self, pfn: Pfn, entry: Entry) {
+    pub fn write(&mut self, pfn: Pfn, entry: Entry) {
         unsafe { self.entry(pfn).write(entry.to_u64()) }
     }
 
     pub fn required_size(arena: Region) -> usize {
-        (arena.size / PAGE_SIZE * METADATA_ENTRY_SIZE).div_ceil(PAGE_SIZE)
+        (arena.size / PAGE_SIZE * ENTRY_SIZE).div_ceil(PAGE_SIZE)
     }
 
     fn entry(&self, pfn: Pfn) -> *mut u64 {

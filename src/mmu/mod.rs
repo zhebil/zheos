@@ -2,7 +2,7 @@ use core::{fmt::Display, ptr::NonNull};
 
 use crate::{
     frames::Frames,
-    memory::{pfn::PAGE_SIZE, region::Region},
+    memory::{pages::Pages, pfn::PAGE_SIZE, region::Region},
     mmu::{
         descriptor::{Descriptor, Kind},
         level::Level,
@@ -49,8 +49,8 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new(frames: &mut Frames) -> Option<Table> {
-        let slots = NonNull::new(frames.alloc(0)?.to_addr() as *mut u64)?;
+    pub fn new(frames: &mut Frames, pages: &mut Pages) -> Option<Table> {
+        let slots = NonNull::new(frames.alloc(pages, 0)?.to_addr() as *mut u64)?;
         let mut table = Table { slots };
 
         // Clear garbage that was left in memory.
@@ -70,10 +70,11 @@ impl Table {
     pub fn identity_map(
         &mut self,
         frames: &mut Frames,
+        pages: &mut Pages,
         region: Region,
         template: Descriptor,
     ) -> Result<(), MapError> {
-        self.map_range(frames, region, template, Level::Level1)
+        self.map_range(frames, pages, region, template, Level::Level1)
     }
 
     /// Walk the table the way the hardware would and report where `va` lands, or
@@ -109,6 +110,7 @@ impl Table {
     fn child_table(
         &mut self,
         frames: &mut Frames,
+        pages: &mut Pages,
         va: usize,
         level: Level,
     ) -> Result<Table, MapError> {
@@ -119,7 +121,7 @@ impl Table {
             // Table already was allocated. Reusing it.
             Kind::Table => Table::from_base(descriptor.address).ok_or(MapError::OutOfMemory),
             Kind::Invalid => {
-                let child = Table::new(frames).ok_or(MapError::OutOfMemory)?;
+                let child = Table::new(frames, pages).ok_or(MapError::OutOfMemory)?;
 
                 self.set(
                     slot,
@@ -142,6 +144,7 @@ impl Table {
     fn map_range(
         &mut self,
         frames: &mut Frames,
+        pages: &mut Pages,
         region: Region,
         template: Descriptor,
         level: Level,
@@ -168,8 +171,9 @@ impl Table {
                 // fine to map at all.
                 let next = level.next().ok_or(MapError::Unaligned(addr))?;
 
-                self.child_table(frames, addr, level)?.map_range(
+                self.child_table(frames, pages, addr, level)?.map_range(
                     frames,
+                    pages,
                     Region {
                         base: addr,
                         size: chunk_end - addr,

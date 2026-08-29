@@ -3,7 +3,7 @@ use core::{alloc::Layout, cmp::max};
 use crate::{
     frames::Frames,
     memory::{
-        pages::{Entry, Pages},
+        pages::{Entry, Pages, Slot},
         pfn::{PAGE_SIZE, Pfn},
     },
 };
@@ -30,11 +30,6 @@ pub fn class_of(layout: Layout) -> Option<usize> {
     None
 }
 
-// Max possible slots count is 512, so 1023 is safe to use as sentinel value
-const FREE_HEAD_EMPTY_VALUE: u16 = 1023;
-
-const LINK_SLOT_EMPTY_VALUE: u32 = (1 << 19) - 1;
-
 pub fn init(pages: &mut Pages, page_pfn: Pfn, class_idx: usize) -> Option<()> {
     let size = CLASSES.get(class_idx)?;
 
@@ -44,13 +39,13 @@ pub fn init(pages: &mut Pages, page_pfn: Pfn, class_idx: usize) -> Option<()> {
 
     for i in 0..number_of_slots {
         let current_base = base + i * size;
-
-        if i < number_of_slots - 1 {
-            unsafe { *(current_base as *mut u16) = (i + 1) as u16 };
+        let next = if i < number_of_slots - 1 {
+            Slot::new(i + 1)
         } else {
-            // TODO: think about that
-            unsafe { *(current_base as *mut u16) = FREE_HEAD_EMPTY_VALUE };
-        }
+            None
+        };
+
+        unsafe { *(current_base as *mut u16) = Slot::to_raw(next) };
     }
 
     pages.write(
@@ -58,10 +53,10 @@ pub fn init(pages: &mut Pages, page_pfn: Pfn, class_idx: usize) -> Option<()> {
         Entry::Slab {
             class: class_idx as u8,
             // First slot is free
-            free_head: 0,
+            free_head: Slot::new(0),
             in_use: 0,
-            next_partial: LINK_SLOT_EMPTY_VALUE,
-            prev_partial: LINK_SLOT_EMPTY_VALUE,
+            next_partial: None,
+            prev_partial: None,
         },
     );
 
@@ -78,19 +73,15 @@ pub fn alloc(pages: &mut Pages, pfn: Pfn) -> Option<usize> {
             prev_partial,
         } => {
             // No free space
-            if free_head == FREE_HEAD_EMPTY_VALUE {
-                return None;
-            }
-
-            let head = free_head;
+            let head = free_head?;
             let size = CLASSES.get(class as usize)?;
 
-            if head as usize >= PAGE_SIZE / size {
+            if head.index() >= PAGE_SIZE / size {
                 return None;
             }
 
-            let address = pfn.to_addr() + head as usize * size;
-            let next_free_head = unsafe { *(address as *mut u16) };
+            let address = pfn.to_addr() + head.index() * size;
+            let next_free_head = Slot::from_raw(unsafe { *(address as *mut u16) });
 
             pages.write(
                 pfn,
@@ -136,21 +127,21 @@ pub fn free(pages: &mut Pages, pfn: Pfn, address: usize) -> Option<()> {
         return None;
     }
 
-    let idx = (offset / size) as u16;
+    let idx = Slot::new(offset / size)?;
 
     // Make sure the slot is not already freed or empty
-    if in_use == 0 || idx == free_head {
+    if in_use == 0 || Some(idx) == free_head {
         return None;
     }
 
     // Make the freed slot point to the previous free slot
-    unsafe { (*(address as *mut u16)) = free_head };
+    unsafe { (*(address as *mut u16)) = Slot::to_raw(free_head) };
 
     pages.write(
         pfn,
         Entry::Slab {
             class,
-            free_head: idx,
+            free_head: Some(idx),
             in_use: in_use - 1,
             next_partial,
             prev_partial,
@@ -175,12 +166,12 @@ pub fn chain_len(pages: &Pages, pfn: Pfn) -> Option<usize> {
     let mut index = free_head;
     let mut count = 0;
 
-    while index != FREE_HEAD_EMPTY_VALUE {
-        if index as usize >= slots || count == slots {
+    while let Some(slot) = index {
+        if slot.index() >= slots || count == slots {
             return None;
         }
 
-        index = unsafe { *((base + index as usize * size) as *const u16) };
+        index = Slot::from_raw(unsafe { *((base + slot.index() * size) as *const u16) });
         count += 1;
     }
 
@@ -250,7 +241,7 @@ impl Cache {
             return None;
         };
 
-        if free_head == FREE_HEAD_EMPTY_VALUE {
+        if free_head.is_none() {
             self.pop(pages, class_idx)?;
         };
 
@@ -269,7 +260,7 @@ impl Cache {
 
         free(pages, pfn, address)?;
 
-        if free_head == FREE_HEAD_EMPTY_VALUE {
+        if free_head.is_none() {
             self.push(pages, class as usize, pfn)?;
         }
 
@@ -295,20 +286,10 @@ impl Cache {
             return (None, None);
         };
 
-        let arena_base = pages.base();
-        let prev_partial = if prev_partial != LINK_SLOT_EMPTY_VALUE {
-            Some(arena_base.offset(prev_partial as usize))
-        } else {
-            None
-        };
-
-        let next_partial = if next_partial != LINK_SLOT_EMPTY_VALUE {
-            Some(arena_base.offset(next_partial as usize))
-        } else {
-            None
-        };
-
-        (next_partial, prev_partial)
+        (
+            next_partial.map(|index| pages.pfn_of(index)),
+            prev_partial.map(|index| pages.pfn_of(index)),
+        )
     }
 
     fn set_next(&mut self, pages: &mut Pages, pfn: Pfn, value: Option<Pfn>) {
@@ -323,10 +304,7 @@ impl Cache {
             return;
         };
 
-        let next_partial = match value {
-            Some(pfn) => pfn.index_from(pages.base()) as u32,
-            None => LINK_SLOT_EMPTY_VALUE,
-        };
+        let next_partial = value.map(|pfn| pages.index_of(pfn));
 
         pages.write(
             pfn,
@@ -352,10 +330,7 @@ impl Cache {
             return;
         };
 
-        let prev_partial = match value {
-            Some(pfn) => pfn.index_from(pages.base()) as u32,
-            None => LINK_SLOT_EMPTY_VALUE,
-        };
+        let prev_partial = value.map(|pfn| pages.index_of(pfn));
 
         pages.write(
             pfn,

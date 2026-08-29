@@ -9,7 +9,7 @@ use crate::{
     memory::{
         image,
         map::MemoryMap,
-        pages::{Entry, Pages},
+        pages::{Entry, Pages, Slot},
         pfn::{PAGE_SIZE, Pfn},
         region::Region,
     },
@@ -142,10 +142,10 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         page,
         Entry::Slab {
             class: 0xF,
-            free_head: 0x3FF,
+            free_head: Slot::new(5),
             in_use: 0x3FF,
-            next_partial: 0x7FFFF,
-            prev_partial: 0x7FFFF,
+            next_partial: None,
+            prev_partial: None,
         },
     );
 
@@ -157,7 +157,9 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
             next_partial,
             prev_partial,
         } => println!(
-            "slab entry: class {class:#x} free_head {free_head:#x} in_use {in_use:#x} next {next_partial:#x} prev {prev_partial:#x}"
+            "slab entry: class {class:#x} free_head {} in_use {in_use:#x} unlinked {}",
+            free_head.map_or(0, Slot::index),
+            next_partial.is_none() && prev_partial.is_none()
         ),
         Entry::Buddy { free, order } => println!("buddy entry: free {free} order {order}"),
     }
@@ -263,7 +265,10 @@ fn print_slab_entry(pages: &Pages, pfn: Pfn) {
     match pages.read(pfn) {
         Entry::Slab {
             free_head, in_use, ..
-        } => println!("entry: free_head {free_head} in_use {in_use}"),
+        } => match free_head {
+            Some(slot) => println!("entry: free_head {} in_use {in_use}", slot.index()),
+            None => println!("entry: free_head none in_use {in_use}"),
+        },
         Entry::Buddy { free, order } => println!("entry: buddy free {free} order {order}"),
     }
 }

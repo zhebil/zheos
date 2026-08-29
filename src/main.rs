@@ -5,7 +5,7 @@ use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
-    frames::{Frames, MAX_ORDER},
+    frames::{Entry, Frames, MAX_ORDER},
     memory::{image, map::MemoryMap, region::Region},
     mmu::{Table, descriptor::Descriptor},
     uart::uart,
@@ -104,7 +104,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     }
 
     let Some(mut frames) = Frames::new(&mut map) else {
-        println!("No room for the page metadata");
+        println!("No room for the page metadata, or the arena is too large to index");
         halt();
     };
 
@@ -128,6 +128,30 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     };
 
     println!("alloc(0): {:#012x}", page.to_addr());
+
+    frames.set_page(
+        page,
+        Entry::Slab {
+            class: 0xF,
+            free_head: 0x3FF,
+            in_use: 0x3FF,
+            next_partial: 0x7FFFF,
+            prev_partial: 0x7FFFF,
+        },
+    );
+
+    match frames.page(page) {
+        Entry::Slab {
+            class,
+            free_head,
+            in_use,
+            next_partial,
+            prev_partial,
+        } => println!(
+            "slab entry: class {class:#x} free_head {free_head:#x} in_use {in_use:#x} next {next_partial:#x} prev {prev_partial:#x}"
+        ),
+        Entry::Buddy { free, order } => println!("buddy entry: free {free} order {order}"),
+    }
 
     frames.free(page);
 

@@ -13,6 +13,8 @@ pub struct Metadata {
 
 const METADATA_ENTRY_SIZE: usize = 8;
 
+const MAX_ARENA_PAGES: usize = 1 << 19;
+
 // 1 extra bit reserved to distinguish between buddy and slab entries
 pub enum Entry {
     Buddy {
@@ -23,8 +25,8 @@ pub enum Entry {
         class: u8,         // 4 bits
         free_head: u16,    // 10 bits
         in_use: u16,       // 10 bits
-        next_partial: u16, // 19 bits
-        prev_partial: u16, // 19 bits
+        next_partial: u32, // 19 bits
+        prev_partial: u32, // 19 bits
     },
 }
 
@@ -32,7 +34,7 @@ impl Metadata {
     pub fn new(arena: Region, storage: Pfn) -> Option<Metadata> {
         let pages = arena.size / PAGE_SIZE;
 
-        if pages == 0 {
+        if pages == 0 || pages > MAX_ARENA_PAGES {
             return None;
         }
 
@@ -53,14 +55,6 @@ impl Metadata {
         })
     }
 
-    pub fn get_page(&self, pfn: Pfn) -> Entry {
-        self.read(pfn)
-    }
-
-    pub fn set_page(&mut self, pfn: Pfn, entry: Entry) {
-        self.write(pfn, entry);
-    }
-
     pub fn pages(&self) -> usize {
         self.pages
     }
@@ -72,11 +66,11 @@ impl Metadata {
         }
     }
 
-    pub fn read(&self, pfn: Pfn) -> Entry {
+    pub(super) fn read(&self, pfn: Pfn) -> Entry {
         Entry::from_u64(unsafe { self.entry(pfn).read() })
     }
 
-    pub fn write(&mut self, pfn: Pfn, entry: Entry) {
+    pub(super) fn write(&mut self, pfn: Pfn, entry: Entry) {
         unsafe { self.entry(pfn).write(entry.to_u64()) }
     }
 
@@ -96,7 +90,7 @@ impl Entry {
     fn to_u64(&self) -> u64 {
         match self {
             Entry::Buddy { free, order } => {
-                (false as u64) | ((*free as u64) << 1) | ((*order as u64) << 2)
+                (false as u64) | ((*free as u64) << 1) | ((*order as u64 & 0xF) << 2)
             }
             Entry::Slab {
                 class,
@@ -106,11 +100,11 @@ impl Entry {
                 prev_partial,
             } => {
                 (true as u64)
-                    | ((*class as u64) << 1)
-                    | ((*free_head as u64) << 5)
-                    | ((*in_use as u64) << 15)
-                    | ((*next_partial as u64) << 25)
-                    | ((*prev_partial as u64) << 44)
+                    | ((*class as u64 & 0xF) << 1)
+                    | ((*free_head as u64 & 0x3FF) << 5)
+                    | ((*in_use as u64 & 0x3FF) << 15)
+                    | ((*next_partial as u64 & 0x7FFFF) << 25)
+                    | ((*prev_partial as u64 & 0x7FFFF) << 44)
             }
         }
     }
@@ -123,8 +117,8 @@ impl Entry {
                 class: ((val >> 1) & 0xF) as u8,
                 free_head: ((val >> 5) & 0x3FF) as u16,
                 in_use: ((val >> 15) & 0x3FF) as u16,
-                next_partial: ((val >> 25) & 0x7FFFF) as u16,
-                prev_partial: ((val >> 44) & 0x7FFFF) as u16,
+                next_partial: ((val >> 25) & 0x7FFFF) as u32,
+                prev_partial: ((val >> 44) & 0x7FFFF) as u32,
             }
         } else {
             Self::Buddy {

@@ -3,11 +3,10 @@ mod metadata;
 
 use core::fmt::Display;
 
+pub use metadata::Entry;
+
 use crate::{
-    frames::{
-        lists::FreeLists,
-        metadata::{Entry, Metadata},
-    },
+    frames::{lists::FreeLists, metadata::Metadata},
     memory::{map::MemoryMap, pfn::Pfn},
 };
 
@@ -40,6 +39,14 @@ impl Frames {
         Some(frames)
     }
 
+    pub fn page(&self, pfn: Pfn) -> Entry {
+        self.metadata.read(pfn)
+    }
+
+    pub fn set_page(&mut self, pfn: Pfn, entry: Entry) {
+        self.metadata.write(pfn, entry);
+    }
+
     pub fn free_blocks(&self, order: usize) -> usize {
         self.lists.blocks(order)
     }
@@ -66,17 +73,11 @@ impl Frames {
     }
 
     pub fn free(&mut self, mut pfn: Pfn) {
-        let entry = self.metadata.read(pfn);
-
-        let Entry::Buddy { free, order } = entry else {
-            unreachable!()
+        let mut order = match self.metadata.read(pfn) {
+            Entry::Buddy { free: true, .. } => return,
+            Entry::Buddy { order, .. } => order as usize,
+            Entry::Slab { .. } => 0,
         };
-
-        if free {
-            return;
-        }
-
-        let mut order = order as usize;
 
         while order < MAX_ORDER {
             let buddy = pfn.buddy(order);
@@ -85,17 +86,15 @@ impl Frames {
                 break;
             }
 
-            let buddy_entry = self.metadata.read(buddy);
-
             let Entry::Buddy {
-                free,
+                free: true,
                 order: buddy_order,
-            } = buddy_entry
+            } = self.metadata.read(buddy)
             else {
-                unreachable!()
+                break;
             };
 
-            if !free || buddy_order != order as u8 {
+            if buddy_order != order as u8 {
                 break;
             }
 

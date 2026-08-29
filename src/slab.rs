@@ -1,4 +1,4 @@
-use core::alloc::Layout;
+use core::{alloc::Layout, cmp::max};
 
 use crate::{
     frames::{Entry, Frames},
@@ -189,7 +189,36 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn alloc(&mut self, frames: &mut Frames, class_idx: usize) -> Option<usize> {
+    pub fn alloc_layout(&mut self, frames: &mut Frames, layout: Layout) -> Option<usize> {
+        match class_of(layout) {
+            Some(class_idx) => self.alloc_slab(frames, class_idx),
+            None => {
+                let pages = layout.size().div_ceil(PAGE_SIZE);
+                let align_pages = layout.align().div_ceil(PAGE_SIZE);
+                let order = max(pages, align_pages).next_power_of_two().ilog2();
+
+                let page_pfn = frames.alloc(order as usize)?;
+                Some(page_pfn.to_addr())
+            }
+        }
+    }
+
+    pub fn free_layout(
+        &mut self,
+        frames: &mut Frames,
+        address: usize,
+        layout: Layout,
+    ) -> Option<()> {
+        match class_of(layout) {
+            Some(_) => self.free_slab(frames, address),
+            None => {
+                frames.free(Pfn::from_addr_down(address));
+                Some(())
+            }
+        }
+    }
+
+    fn alloc_slab(&mut self, frames: &mut Frames, class_idx: usize) -> Option<usize> {
         let head = self.heads.get(class_idx)?;
         let head = match *head {
             Some(head) => head,
@@ -214,9 +243,8 @@ impl Cache {
         Some(address)
     }
 
-    pub fn free(&mut self, frames: &mut Frames, address: usize) -> Option<()> {
-        let page = address & !0xFFF;
-        let pfn = Pfn::from_addr_down(page);
+    fn free_slab(&mut self, frames: &mut Frames, address: usize) -> Option<()> {
+        let pfn = Pfn::from_addr_down(address);
 
         let Entry::Slab {
             free_head, class, ..

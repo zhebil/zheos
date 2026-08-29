@@ -178,6 +178,8 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
 
     cache_probe(&mut frames);
 
+    layout_probe(&mut frames);
+
     let Some(mut table) = Table::new(&mut frames) else {
         println!("No room for a translation table");
         halt();
@@ -343,16 +345,59 @@ fn slab_probe(frames: &mut Frames) {
     frames.free(page);
 }
 
+fn layout_probe(frames: &mut Frames) {
+    let mut cache = slab::Cache {
+        heads: [None; slab::CLASSES_COUNT],
+    };
+
+    let small = Layout::new::<[u8; 64]>();
+    let three_k = Layout::new::<[u8; 3000]>();
+    let nine_k = Layout::new::<[u8; 9000]>();
+
+    println!("layout: start         {frames}");
+
+    let Some(a) = cache.alloc_layout(frames, three_k) else {
+        println!("layout: 3000 refused");
+        return;
+    };
+
+    println!("layout: 3000 live     {frames}, at {a:#012x}");
+
+    let Some(b) = cache.alloc_layout(frames, nine_k) else {
+        println!("layout: 9000 refused");
+        return;
+    };
+
+    println!("layout: 9000 live     {frames}, at {b:#012x}");
+
+    let Some(c) = cache.alloc_layout(frames, small) else {
+        println!("layout: 64 refused");
+        return;
+    };
+
+    println!("layout: 64 live       {frames}, at {c:#012x}");
+
+    let mut refused = 0;
+
+    for (address, layout) in [(c, small), (b, nine_k), (a, three_k)] {
+        if cache.free_layout(frames, address, layout).is_none() {
+            refused += 1;
+        }
+    }
+
+    println!("layout: 0 live        {frames}, refused {refused}");
+}
+
 fn cache_run(
     cache: &mut slab::Cache,
     frames: &mut Frames,
     slots: &mut [usize],
-    class: usize,
+    layout: Layout,
 ) -> usize {
     let mut handed = 0;
 
     while handed < slots.len() {
-        let Some(address) = cache.alloc(frames, class) else {
+        let Some(address) = cache.alloc_layout(frames, layout) else {
             break;
         };
 
@@ -369,60 +414,64 @@ fn cache_probe(frames: &mut Frames) {
     };
 
     let mut slots = [0usize; 192];
+    let layout = Layout::new::<[u8; 64]>();
 
     println!("cache: start          {frames}");
 
-    let handed = cache_run(&mut cache, frames, &mut slots[..64], 3);
+    let handed = cache_run(&mut cache, frames, &mut slots[..64], layout);
     println!("cache: {handed} live         {frames}");
 
     let mut refused = 0;
 
     for &address in slots[..handed].iter() {
-        if cache.free(frames, address).is_none() {
+        if cache.free_layout(frames, address, layout).is_none() {
             refused += 1;
         }
     }
 
     println!("cache: 0 live         {frames}, refused {refused}");
 
-    let handed = cache_run(&mut cache, frames, &mut slots[..64], 3);
+    let handed = cache_run(&mut cache, frames, &mut slots[..64], layout);
 
     for &address in slots[..handed - 1].iter() {
-        if cache.free(frames, address).is_none() {
+        if cache.free_layout(frames, address, layout).is_none() {
             refused += 1;
         }
     }
 
     println!("cache: 1 live         {frames}");
 
-    if cache.free(frames, slots[handed - 1]).is_none() {
+    if cache
+        .free_layout(frames, slots[handed - 1], layout)
+        .is_none()
+    {
         refused += 1;
     }
 
     println!("cache: 0 live         {frames}");
 
-    let handed = cache_run(&mut cache, frames, &mut slots[..128], 3);
+    let handed = cache_run(&mut cache, frames, &mut slots[..128], layout);
     println!("cache: {handed} live        {frames}");
 
     for &address in slots[..handed].iter() {
-        if cache.free(frames, address).is_none() {
+        if cache.free_layout(frames, address, layout).is_none() {
             refused += 1;
         }
     }
 
     println!("cache: 0 live         {frames}, refused {refused}");
 
-    let handed = cache_run(&mut cache, frames, &mut slots, 3);
+    let handed = cache_run(&mut cache, frames, &mut slots, layout);
     println!("cache: {handed} live        {frames}");
 
     for i in [0usize, 64, 128] {
-        if cache.free(frames, slots[i]).is_none() {
+        if cache.free_layout(frames, slots[i], layout).is_none() {
             refused += 1;
         }
     }
 
     for &address in slots[65..128].iter() {
-        if cache.free(frames, address).is_none() {
+        if cache.free_layout(frames, address, layout).is_none() {
             refused += 1;
         }
     }
@@ -430,7 +479,7 @@ fn cache_probe(frames: &mut Frames) {
     println!("cache: middle empty   {frames}");
 
     for &address in slots[1..64].iter().chain(slots[129..].iter()) {
-        if cache.free(frames, address).is_none() {
+        if cache.free_layout(frames, address, layout).is_none() {
             refused += 1;
         }
     }

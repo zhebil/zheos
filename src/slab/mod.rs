@@ -13,6 +13,20 @@ const CLASSES_COUNT: usize = 9; // 8, 16, 32, 64, 128, 256, 512, 1024, 2048
 
 const CLASSES: [usize; CLASSES_COUNT] = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
+// Compile time computed powers of 2 shifts for the classes
+const SHIFTS: [u32; CLASSES_COUNT] = {
+    let mut shifts = [0; CLASSES_COUNT];
+    let mut i = 0;
+
+    while i < CLASSES_COUNT {
+        assert!(CLASSES[i].is_power_of_two());
+        shifts[i] = CLASSES[i].trailing_zeros();
+        i += 1;
+    }
+
+    shifts
+};
+
 pub fn class_of(layout: Layout) -> Option<usize> {
     let size = layout.size();
     let align = layout.align();
@@ -22,7 +36,7 @@ pub fn class_of(layout: Layout) -> Option<usize> {
             continue;
         }
 
-        if !c.is_multiple_of(align) {
+        if !is_multiple_of_pow2(c, align) {
             continue;
         }
         return Some(i);
@@ -46,10 +60,10 @@ impl Slab {
     }
 
     pub fn init(pages: &mut Pages, pfn: Pfn, class_idx: usize) -> Option<Slab> {
-        let size = *CLASSES.get(class_idx)?;
+        let shift = *SHIFTS.get(class_idx)?;
 
         let slab = Slab { pfn };
-        slab.link_slots(size);
+        slab.link_slots(shift);
 
         pages.write(
             pfn,
@@ -66,12 +80,13 @@ impl Slab {
         Some(slab)
     }
 
-    fn link_slots(&self, size: usize) {
+    fn link_slots(&self, shift: u32) {
         let base = self.pfn.to_addr();
-        let number_of_slots = PAGE_SIZE / size;
+        // Shift is power of two, so we can use bitwise operation instead of division
+        let number_of_slots = div_pow2(PAGE_SIZE, shift);
 
         for i in 0..number_of_slots {
-            let current_base = base + i * size;
+            let current_base = base + mul_pow2(i, shift);
             let next = if i < number_of_slots - 1 {
                 Slot::new(i + 1)
             } else {
@@ -96,13 +111,13 @@ impl Slab {
 
         // No free space
         let head = free_head?;
-        let size = *CLASSES.get(class as usize)?;
+        let shift = *SHIFTS.get(class as usize)?;
 
-        if head.index() >= PAGE_SIZE / size {
+        if head.index() >= div_pow2(PAGE_SIZE, shift) {
             return None;
         }
 
-        let address = self.pfn.to_addr() + head.index() * size;
+        let address = self.pfn.to_addr() + mul_pow2(head.index(), shift);
         let next_free_head = Slot::from_raw(unsafe { *(address as *mut u16) });
 
         pages.write(
@@ -131,7 +146,7 @@ impl Slab {
             return None;
         };
 
-        let size = *CLASSES.get(class as usize)?;
+        let shift = *SHIFTS.get(class as usize)?;
         let base = self.pfn.to_addr();
 
         // Make sure address is inside the slab page
@@ -141,11 +156,11 @@ impl Slab {
 
         let offset = address - base;
 
-        if offset >= PAGE_SIZE || !offset.is_multiple_of(size) {
+        if offset >= PAGE_SIZE || !is_multiple_of_pow2(offset, 1 << shift) {
             return None;
         }
 
-        let idx = Slot::new(offset / size)?;
+        let idx = Slot::new(div_pow2(offset, shift))?;
 
         // Make sure the slot is not already freed or empty
         if in_use == 0 || Some(idx) == free_head {
@@ -263,4 +278,20 @@ impl Slab {
 
         in_use == 0
     }
+}
+
+#[inline]
+fn is_multiple_of_pow2(value: usize, multiple: usize) -> bool {
+    value & (multiple - 1) == 0
+}
+
+// power of 2 division and multiplication
+#[inline]
+fn div_pow2(a: usize, b: u32) -> usize {
+    a >> b
+}
+
+#[inline]
+fn mul_pow2(a: usize, b: u32) -> usize {
+    a << b
 }

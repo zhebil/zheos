@@ -280,14 +280,14 @@ fn slab_probe(pages: &mut Pages, frames: &mut Frames) {
     };
 
     for class in [0usize, 3, 8] {
-        if slab::init(pages, page, class).is_none() {
+        let Some(slab) = slab::Slab::init(pages, page, class) else {
             println!("slab: class index {class} is out of range");
             continue;
-        }
+        };
 
         let expected = PAGE_SIZE / slab::CLASSES[class];
 
-        match slab::chain_len(pages, page) {
+        match slab.chain_len(pages) {
             Some(count) => println!(
                 "class {}: chain {count} of {expected}",
                 slab::CLASSES[class]
@@ -296,13 +296,16 @@ fn slab_probe(pages: &mut Pages, frames: &mut Frames) {
         }
     }
 
-    slab::init(pages, page, 3);
+    let Some(slab) = slab::Slab::init(pages, page, 3) else {
+        println!("slab: class index 3 is out of range");
+        return;
+    };
 
     let mut slots = [0usize; 64];
     let mut handed = 0;
 
     while handed < slots.len() {
-        let Some(address) = slab::alloc(pages, page) else {
+        let Some(address) = slab.alloc(pages) else {
             break;
         };
 
@@ -311,7 +314,7 @@ fn slab_probe(pages: &mut Pages, frames: &mut Frames) {
         handed += 1;
     }
 
-    let full = slab::alloc(pages, page).is_none();
+    let full = slab.alloc(pages).is_none();
     let mut wrong = 0;
 
     for (i, &address) in slots[..handed].iter().enumerate() {
@@ -326,30 +329,30 @@ fn slab_probe(pages: &mut Pages, frames: &mut Frames) {
     let mut rejected = 0;
 
     for address in [slots[0] + 1, page.to_addr() + PAGE_SIZE, page.to_addr() - 8] {
-        if slab::free(pages, page, address).is_none() {
+        if slab.free(pages, address).is_none() {
             rejected += 1;
         }
     }
 
-    if slab::free(pages, page, slots[0]).is_some() && slab::free(pages, page, slots[0]).is_none() {
+    if slab.free(pages, slots[0]).is_some() && slab.free(pages, slots[0]).is_none() {
         rejected += 1;
     }
 
     let mut refused = 0;
 
     for &address in slots[1..handed].iter() {
-        if slab::free(pages, page, address).is_none() {
+        if slab.free(pages, address).is_none() {
             refused += 1;
         }
     }
 
-    if slab::free(pages, page, slots[0]).is_none() {
+    if slab.free(pages, slots[0]).is_none() {
         rejected += 1;
     }
 
     println!("class 64: bogus frees rejected {rejected} of 5, good frees refused {refused}");
 
-    match slab::chain_len(pages, page) {
+    match slab.chain_len(pages) {
         Some(count) => println!("class 64: chain {count} after freeing all"),
         None => println!("class 64: chain is malformed after freeing"),
     }

@@ -1,12 +1,12 @@
-use core::{fmt::Display, ptr::NonNull};
+use core::{alloc::Layout, fmt::Display, ptr::NonNull};
 
 use crate::{
-    frames::Frames,
-    memory::{pages::Pages, pfn::PAGE_SIZE, region::Region},
+    memory::{pfn::PAGE_SIZE, region::Region},
     mmu::{
         descriptor::{Descriptor, Kind},
         level::Level,
     },
+    slab::Heap,
 };
 
 pub mod descriptor;
@@ -17,9 +17,9 @@ const SLOTS: usize = 512;
 const SLOT_MASK: usize = SLOTS - 1;
 
 /// A table is exactly one page, and every descriptor pointing at one assumes the
-/// low twelve bits of its address are zero. `Frames` hands out whole pages at
-/// order 0, so the allocator's unit is the alignment guarantee - but only while
-/// the two sizes agree.
+/// low twelve bits of its address are zero. That is asked for as an alignment
+/// rather than assumed, so the guarantee is in the request - but only while the
+/// two sizes agree.
 const _: () = assert!(SLOTS * size_of::<u64>() == PAGE_SIZE);
 
 pub enum MapError {
@@ -49,8 +49,9 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new(frames: &mut Frames, pages: &mut Pages) -> Option<Table> {
-        let slots = NonNull::new(frames.alloc(pages, 0)?.to_addr() as *mut u64)?;
+    pub fn new(heap: &mut Heap) -> Option<Table> {
+        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).ok()?;
+        let slots = NonNull::new(heap.alloc_layout(layout)? as *mut u64)?;
         let mut table = Table { slots };
 
         // Clear garbage that was left in memory.
@@ -69,12 +70,11 @@ impl Table {
     /// address, with `template` supplying everything but the address and the kind.
     pub fn identity_map(
         &mut self,
-        frames: &mut Frames,
-        pages: &mut Pages,
+        heap: &mut Heap,
         region: Region,
         template: Descriptor,
     ) -> Result<(), MapError> {
-        self.map_range(frames, pages, region, template, Level::Level1)
+        self.map_range(heap, region, template, Level::Level1)
     }
 
     /// Walk the table the way the hardware would and report where `va` lands, or
@@ -107,13 +107,7 @@ impl Table {
 
     /// The table below the slot `va` falls in, allocated and linked if it is not
     /// there yet.
-    fn child_table(
-        &mut self,
-        frames: &mut Frames,
-        pages: &mut Pages,
-        va: usize,
-        level: Level,
-    ) -> Result<Table, MapError> {
+    fn child_table(&mut self, heap: &mut Heap, va: usize, level: Level) -> Result<Table, MapError> {
         let slot = level.slot_of(va);
         let descriptor = self.get(slot);
 
@@ -121,7 +115,7 @@ impl Table {
             // Table already was allocated. Reusing it.
             Kind::Table => Table::from_base(descriptor.address).ok_or(MapError::OutOfMemory),
             Kind::Invalid => {
-                let child = Table::new(frames, pages).ok_or(MapError::OutOfMemory)?;
+                let child = Table::new(heap).ok_or(MapError::OutOfMemory)?;
 
                 self.set(
                     slot,
@@ -143,8 +137,7 @@ impl Table {
     /// One level of the walk. Each pass covers exactly one slot.
     fn map_range(
         &mut self,
-        frames: &mut Frames,
-        pages: &mut Pages,
+        heap: &mut Heap,
         region: Region,
         template: Descriptor,
         level: Level,
@@ -171,9 +164,8 @@ impl Table {
                 // fine to map at all.
                 let next = level.next().ok_or(MapError::Unaligned(addr))?;
 
-                self.child_table(frames, pages, addr, level)?.map_range(
-                    frames,
-                    pages,
+                self.child_table(heap, addr, level)?.map_range(
+                    heap,
                     Region {
                         base: addr,
                         size: chunk_end - addr,

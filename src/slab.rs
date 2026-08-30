@@ -31,7 +31,7 @@ pub fn class_of(layout: Layout) -> Option<usize> {
 }
 
 pub struct Cache {
-    pub heads: [Option<Pfn>; CLASSES_COUNT],
+    pub heads: [Option<Slab>; CLASSES_COUNT],
 }
 
 impl Cache {
@@ -76,13 +76,12 @@ impl Cache {
         frames: &mut Frames,
         class_idx: usize,
     ) -> Option<usize> {
-        let head = self.heads.get(class_idx)?;
-        let slab = match *head {
-            Some(head) => Slab::at(pages, head)?,
+        let slab = match self.heads.get(class_idx)? {
+            Some(slab) => *slab,
             None => {
                 let page_pfn = frames.alloc(pages, 0)?;
                 let slab = Slab::init(pages, page_pfn, class_idx)?;
-                self.heads[class_idx] = Some(page_pfn);
+                self.heads[class_idx] = Some(slab);
                 slab
             }
         };
@@ -98,72 +97,63 @@ impl Cache {
 
     fn free_slab(&mut self, pages: &mut Pages, frames: &mut Frames, address: usize) -> Option<()> {
         let slab = Slab::from_addr(pages, address)?;
+        let class_idx = slab.class(pages)?;
 
         let was_full = slab.is_full(pages);
 
         slab.free(pages, address)?;
 
         if was_full {
-            self.push(pages, slab.class, slab.pfn)?;
+            self.push(pages, class_idx, slab)?;
         }
 
         if slab.is_empty(pages) {
-            self.unlink(pages, slab.pfn);
+            self.unlink(pages, slab);
             frames.free(pages, slab.pfn);
         }
 
         Some(())
     }
 
-    fn push(&mut self, pages: &mut Pages, class_idx: usize, new_pfn: Pfn) -> Option<()> {
-        let head = *self.heads.get(class_idx)?;
+    fn push(&mut self, pages: &mut Pages, class_idx: usize, slab: Slab) -> Option<()> {
+        let old_slab = *self.heads.get(class_idx)?;
 
-        let slab = Slab::at(pages, new_pfn)?;
-        slab.set_next(pages, head);
+        slab.set_next(pages, old_slab);
         slab.set_prev(pages, None);
 
-        if let Some(head) = head {
-            let prev_slab = Slab::at(pages, head)?;
-            prev_slab.set_prev(pages, Some(new_pfn));
+        if let Some(old_slab) = old_slab {
+            old_slab.set_prev(pages, Some(slab));
         }
 
-        self.heads[class_idx] = Some(new_pfn);
+        self.heads[class_idx] = Some(slab);
 
         Some(())
     }
 
-    fn unlink(&mut self, pages: &mut Pages, pfn: Pfn) -> Option<()> {
-        let Entry::Slab { class, .. } = pages.read(pfn) else {
-            return None;
-        };
+    fn unlink(&mut self, pages: &mut Pages, slab: Slab) -> Option<()> {
+        let class_idx = slab.class(pages)?;
+        let (next, prev) = slab.links(pages);
 
-        let class_idx = class as usize;
-        let slab_to_unlink = Slab::at(pages, pfn)?;
-        let (next, prev) = slab_to_unlink.links(pages);
-
-        let prev_slab = prev.and_then(|pfn| Slab::at(pages, pfn));
-        let next_slab = next.and_then(|pfn| Slab::at(pages, pfn));
-
-        if let Some(prev) = prev_slab {
-            prev.set_next(pages, next);
-        } else if self.heads.get(class_idx).copied().flatten() == Some(pfn) {
+        if let Some(prev_slab) = prev {
+            prev_slab.set_next(pages, next);
+        } else if self.heads.get(class_idx).copied().flatten() == Some(slab) {
             self.heads[class_idx] = next;
         } else {
             return None;
         }
 
-        if let Some(next) = next_slab {
-            next.set_prev(pages, prev);
+        if let Some(next_slab) = next {
+            next_slab.set_prev(pages, prev);
         }
 
-        slab_to_unlink.set_next(pages, None);
-        slab_to_unlink.set_prev(pages, None);
+        slab.set_next(pages, None);
+        slab.set_prev(pages, None);
 
         Some(())
     }
 
-    fn pop(&mut self, pages: &mut Pages, class_idx: usize) -> Option<Pfn> {
-        let head = self.heads.get(class_idx).cloned().flatten()?;
+    fn pop(&mut self, pages: &mut Pages, class_idx: usize) -> Option<Slab> {
+        let head = self.heads.get(class_idx).copied().flatten()?;
 
         self.unlink(pages, head);
 
@@ -171,36 +161,24 @@ impl Cache {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Slab {
     pfn: Pfn,
-    class: usize,
 }
 
 impl Slab {
-    pub fn at(pages: &mut Pages, pfn: Pfn) -> Option<Slab> {
-        let Entry::Slab { class, .. } = pages.read(pfn) else {
-            return None;
-        };
-
-        Some(Slab {
-            pfn,
-            class: class as usize,
-        })
+    pub fn at(pages: &Pages, pfn: Pfn) -> Option<Slab> {
+        matches!(pages.read(pfn), Entry::Slab { .. }).then_some(Slab { pfn })
     }
 
-    pub fn from_addr(pages: &mut Pages, addr: usize) -> Option<Slab> {
-        let pfn = Pfn::from_addr_down(addr);
-        Slab::at(pages, pfn)
+    pub fn from_addr(pages: &Pages, addr: usize) -> Option<Slab> {
+        Slab::at(pages, Pfn::from_addr_down(addr))
     }
 
     pub fn init(pages: &mut Pages, pfn: Pfn, class_idx: usize) -> Option<Slab> {
         let size = *CLASSES.get(class_idx)?;
 
-        let slab = Slab {
-            pfn,
-            class: class_idx,
-        };
+        let slab = Slab { pfn };
         slab.link_slots(size);
 
         pages.write(
@@ -348,7 +326,14 @@ impl Slab {
         Some(count)
     }
 
-    fn links(&self, pages: &Pages) -> (Option<Pfn>, Option<Pfn>) {
+    fn class(&self, pages: &Pages) -> Option<usize> {
+        match pages.read(self.pfn) {
+            Entry::Slab { class, .. } => Some(class as usize),
+            Entry::Buddy { .. } => None,
+        }
+    }
+
+    fn links(&self, pages: &Pages) -> (Option<Slab>, Option<Slab>) {
         let Entry::Slab {
             next_partial,
             prev_partial,
@@ -359,12 +344,16 @@ impl Slab {
         };
 
         (
-            next_partial.map(|index| pages.pfn_of(index)),
-            prev_partial.map(|index| pages.pfn_of(index)),
+            next_partial
+                .map(|index| pages.pfn_of(index))
+                .and_then(|pfn| Slab::at(pages, pfn)),
+            prev_partial
+                .map(|index| pages.pfn_of(index))
+                .and_then(|pfn| Slab::at(pages, pfn)),
         )
     }
 
-    fn set_next(&self, pages: &mut Pages, value: Option<Pfn>) {
+    fn set_next(&self, pages: &mut Pages, value: Option<Slab>) {
         let Entry::Slab {
             class,
             free_head,
@@ -376,7 +365,7 @@ impl Slab {
             return;
         };
 
-        let next_partial = value.map(|pfn| pages.index_of(pfn));
+        let next_partial = value.map(|slab| pages.index_of(slab.pfn));
 
         pages.write(
             self.pfn,
@@ -390,7 +379,7 @@ impl Slab {
         );
     }
 
-    fn set_prev(&self, pages: &mut Pages, value: Option<Pfn>) {
+    fn set_prev(&self, pages: &mut Pages, value: Option<Slab>) {
         let Entry::Slab {
             class,
             free_head,
@@ -402,7 +391,7 @@ impl Slab {
             return;
         };
 
-        let prev_partial = value.map(|pfn| pages.index_of(pfn));
+        let prev_partial = value.map(|slab| pages.index_of(slab.pfn));
 
         pages.write(
             self.pfn,

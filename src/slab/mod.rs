@@ -1,17 +1,17 @@
-use core::{alloc::Layout, cmp::max, fmt::Display};
+mod cache;
 
-use crate::{
-    frames::Frames,
-    memory::{
-        map::MemoryMap,
-        pages::{Entry, Pages, Slot},
-        pfn::{PAGE_SIZE, Pfn},
-    },
+use core::alloc::Layout;
+
+pub use cache::Cache;
+
+use crate::memory::{
+    pages::{Entry, Pages, Slot},
+    pfn::{PAGE_SIZE, Pfn},
 };
 
-pub const CLASSES_COUNT: usize = 9; // 8, 16, 32, 64, 128, 256, 512, 1024, 2048
+const CLASSES_COUNT: usize = 9; // 8, 16, 32, 64, 128, 256, 512, 1024, 2048
 
-pub const CLASSES: [usize; CLASSES_COUNT] = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+const CLASSES: [usize; CLASSES_COUNT] = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
 pub fn class_of(layout: Layout) -> Option<usize> {
     let size = layout.size();
@@ -31,110 +31,8 @@ pub fn class_of(layout: Layout) -> Option<usize> {
     None
 }
 
-pub struct Cache {
-    pub heads: [Option<Slab>; CLASSES_COUNT],
-}
-
-impl Cache {
-    pub fn new() -> Self {
-        Self {
-            heads: [None; CLASSES_COUNT],
-        }
-    }
-
-    fn alloc_slab(
-        &mut self,
-        pages: &mut Pages,
-        frames: &mut Frames,
-        class_idx: usize,
-    ) -> Option<usize> {
-        let slab = match self.heads.get(class_idx)? {
-            Some(slab) => *slab,
-            None => {
-                let page_pfn = frames.alloc(pages, 0)?;
-                let slab = Slab::init(pages, page_pfn, class_idx)?;
-                self.heads[class_idx] = Some(slab);
-                slab
-            }
-        };
-
-        let address = slab.alloc(pages)?;
-
-        if slab.is_full(pages) {
-            self.pop(pages, class_idx)?;
-        };
-
-        Some(address)
-    }
-
-    fn free_slab(&mut self, pages: &mut Pages, frames: &mut Frames, address: usize) -> Option<()> {
-        let slab = Slab::from_addr(pages, address)?;
-        let class_idx = slab.class(pages)?;
-
-        let was_full = slab.is_full(pages);
-
-        slab.free(pages, address)?;
-
-        if was_full {
-            self.push(pages, class_idx, slab)?;
-        }
-
-        if slab.is_empty(pages) {
-            self.unlink(pages, slab);
-            frames.free(pages, slab.pfn);
-        }
-
-        Some(())
-    }
-
-    fn push(&mut self, pages: &mut Pages, class_idx: usize, slab: Slab) -> Option<()> {
-        let old_slab = *self.heads.get(class_idx)?;
-
-        slab.set_next(pages, old_slab);
-        slab.set_prev(pages, None);
-
-        if let Some(old_slab) = old_slab {
-            old_slab.set_prev(pages, Some(slab));
-        }
-
-        self.heads[class_idx] = Some(slab);
-
-        Some(())
-    }
-
-    fn unlink(&mut self, pages: &mut Pages, slab: Slab) -> Option<()> {
-        let class_idx = slab.class(pages)?;
-        let (next, prev) = slab.links(pages);
-
-        if let Some(prev_slab) = prev {
-            prev_slab.set_next(pages, next);
-        } else if self.heads.get(class_idx).copied().flatten() == Some(slab) {
-            self.heads[class_idx] = next;
-        } else {
-            return None;
-        }
-
-        if let Some(next_slab) = next {
-            next_slab.set_prev(pages, prev);
-        }
-
-        slab.set_next(pages, None);
-        slab.set_prev(pages, None);
-
-        Some(())
-    }
-
-    fn pop(&mut self, pages: &mut Pages, class_idx: usize) -> Option<Slab> {
-        let head = self.heads.get(class_idx).copied().flatten()?;
-
-        self.unlink(pages, head);
-
-        Some(head)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Slab {
+struct Slab {
     pfn: Pfn,
 }
 
@@ -364,76 +262,5 @@ impl Slab {
         };
 
         in_use == 0
-    }
-}
-
-pub struct Heap {
-    pages: Pages,
-    frames: Frames,
-    cache: Cache,
-}
-
-impl Heap {
-    pub fn new(map: &mut MemoryMap) -> Option<Self> {
-        let mut pages = Pages::new(map)?;
-        let frames = Frames::new(map, &mut pages);
-        let cache = Cache::new();
-
-        Some(Self {
-            pages,
-            frames,
-            cache,
-        })
-    }
-
-    pub fn alloc_layout(&mut self, layout: Layout) -> Option<usize> {
-        match class_of(layout) {
-            Some(class_idx) => self.slab_alloc(class_idx),
-            None => {
-                let size_pages = layout.size().div_ceil(PAGE_SIZE);
-                let align_pages = layout.align().div_ceil(PAGE_SIZE);
-                let order = max(size_pages, align_pages).next_power_of_two().ilog2();
-
-                self.alloc_pages(order)
-            }
-        }
-    }
-
-    pub fn free_layout(&mut self, address: usize, layout: Layout) -> Option<()> {
-        match class_of(layout) {
-            Some(_) => self.slab_free(address),
-            None => self.free_pages(address),
-        }
-    }
-
-    fn alloc_pages(&mut self, order: u32) -> Option<usize> {
-        let page_pfn = self.frames.alloc(&mut self.pages, order as usize)?;
-        Some(page_pfn.to_addr())
-    }
-
-    fn free_pages(&mut self, address: usize) -> Option<()> {
-        self.frames
-            .free(&mut self.pages, Pfn::from_addr_down(address));
-        Some(())
-    }
-
-    pub fn frames(&self) -> &Frames {
-        &self.frames
-    }
-
-    fn slab_alloc(&mut self, class_idx: usize) -> Option<usize> {
-        self.cache
-            .alloc_slab(&mut self.pages, &mut self.frames, class_idx)
-    }
-
-    fn slab_free(&mut self, address: usize) -> Option<()> {
-        self.cache
-            .free_slab(&mut self.pages, &mut self.frames, address)
-    }
-}
-
-impl Display for Heap {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.frames)
     }
 }

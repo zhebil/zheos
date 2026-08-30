@@ -6,9 +6,9 @@ use core::{alloc::Layout, num::NonZeroU32, time::Duration};
 use crate::{
     board::{Board, Conduit},
     frames::MAX_ORDER,
+    heap::Heap,
     memory::{image, map::MemoryMap, region::Region},
     mmu::{Table, descriptor::Descriptor},
-    slab::Heap,
     uart::uart,
 };
 
@@ -43,6 +43,7 @@ mod dtb;
 mod exception;
 mod frames;
 mod gic;
+mod heap;
 mod input;
 mod irq;
 mod lock;

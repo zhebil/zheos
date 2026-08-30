@@ -1,12 +1,12 @@
 use core::{alloc::Layout, fmt::Display, ptr::NonNull};
 
 use crate::{
+    heap::Heap,
     memory::{pfn::PAGE_SIZE, region::Region},
     mmu::{
         descriptor::{Descriptor, Kind},
         level::Level,
     },
-    slab::Heap,
 };
 
 pub mod descriptor;

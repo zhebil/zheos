@@ -1,5 +1,9 @@
 target/
 
+# Local analysis helpers, not part of the kernel.
+scripts/
+.asm-budget.json
+
 *.o
 *.elf
 *.asm
@@ -12,3 +16,5 @@ virt.dtb
 .dolt/
 *.db
 .beads-credential-key
+
+kernel.bin

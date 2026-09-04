@@ -35,6 +35,8 @@ pub struct Board {
     pub uart: Device,
     pub gic: Gic,
     pub memory: Region,
+    // Discovered here, used once the timer returns from the timer branch.
+    #[allow(dead_code)]
     pub timer_intid: u32,
     pub psci: Conduit,
 }

@@ -34,34 +34,32 @@ impl Cache {
         let address = slab.alloc(pages)?;
 
         if slab.is_full(pages) {
-            self.pop(pages, class_idx)?;
+            self.pop(pages, class_idx);
         };
 
         Some(address)
     }
 
-    pub fn free(&mut self, pages: &mut Pages, frames: &mut Frames, address: usize) -> Option<()> {
-        let slab = Slab::from_addr(pages, address)?;
-        let class_idx = slab.class(pages)?;
+    pub fn free(&mut self, pages: &mut Pages, frames: &mut Frames, address: usize) {
+        let slab = Slab::from_addr(pages, address).expect("Cache::free: slab not found");
+        let class_idx = slab.class(pages);
 
         let was_full = slab.is_full(pages);
 
-        slab.free(pages, address)?;
+        slab.free(pages, address);
 
         if was_full {
-            self.push(pages, class_idx, slab)?;
+            self.push(pages, class_idx, slab);
         }
 
         if slab.is_empty(pages) {
             self.unlink(pages, slab);
             frames.free(pages, slab.pfn);
         }
-
-        Some(())
     }
 
-    fn push(&mut self, pages: &mut Pages, class_idx: usize, slab: Slab) -> Option<()> {
-        let old_slab = *self.heads.get(class_idx)?;
+    fn push(&mut self, pages: &mut Pages, class_idx: usize, slab: Slab) {
+        let old_slab = self.heads[class_idx];
 
         slab.set_next(pages, old_slab);
         slab.set_prev(pages, None);
@@ -71,20 +69,20 @@ impl Cache {
         }
 
         self.heads[class_idx] = Some(slab);
-
-        Some(())
     }
 
-    fn unlink(&mut self, pages: &mut Pages, slab: Slab) -> Option<()> {
-        let class_idx = slab.class(pages)?;
+    fn unlink(&mut self, pages: &mut Pages, slab: Slab) {
+        let class_idx = slab.class(pages);
         let (next, prev) = slab.links(pages);
 
         if let Some(prev_slab) = prev {
             prev_slab.set_next(pages, next);
-        } else if self.heads.get(class_idx).copied().flatten() == Some(slab) {
-            self.heads[class_idx] = next;
         } else {
-            return None;
+            assert!(
+                self.heads[class_idx] == Some(slab),
+                "slab is not on its class list"
+            );
+            self.heads[class_idx] = next;
         }
 
         if let Some(next_slab) = next {
@@ -93,15 +91,11 @@ impl Cache {
 
         slab.set_next(pages, None);
         slab.set_prev(pages, None);
-
-        Some(())
     }
 
-    fn pop(&mut self, pages: &mut Pages, class_idx: usize) -> Option<Slab> {
-        let head = self.heads.get(class_idx).copied().flatten()?;
+    fn pop(&mut self, pages: &mut Pages, class_idx: usize) {
+        let head = self.heads[class_idx].expect("popping a class with no partial slab");
 
         self.unlink(pages, head);
-
-        Some(head)
     }
 }

@@ -134,7 +134,7 @@ impl Slab {
         Some(address)
     }
 
-    pub fn free(&self, pages: &mut Pages, address: usize) -> Option<()> {
+    pub fn free(&self, pages: &mut Pages, address: usize) {
         let Entry::Slab {
             class,
             free_head,
@@ -143,29 +143,32 @@ impl Slab {
             prev_partial,
         } = pages.read(self.pfn)
         else {
-            return None;
+            panic!("freeing an object on a page that is not a slab")
         };
 
-        let shift = *SHIFTS.get(class as usize)?;
-        let base = self.pfn.to_addr();
+        let shift = *SHIFTS
+            .get(class as usize)
+            .expect("slab page has an unknown size class");
 
-        // Make sure address is inside the slab page
-        if address < base {
-            return None;
-        }
+        assert!(
+            Pfn::from_addr_down(address) == self.pfn,
+            "freeing an object against the wrong page"
+        );
 
-        let offset = address - base;
+        let offset = address - self.pfn.to_addr();
 
-        if offset >= PAGE_SIZE || !is_multiple_of_pow2(offset, 1 << shift) {
-            return None;
-        }
+        assert!(
+            is_multiple_of_pow2(offset, 1 << shift),
+            "freeing the middle of an object instead of its start"
+        );
 
-        let idx = Slot::new(div_pow2(offset, shift))?;
+        let idx = Slot::new(div_pow2(offset, shift)).expect("slot index out of range");
 
-        // Make sure the slot is not already freed or empty
-        if in_use == 0 || Some(idx) == free_head {
-            return None;
-        }
+        assert!(
+            in_use != 0,
+            "freeing an object from a slab that has none in use"
+        );
+        assert!(Some(idx) != free_head, "freeing the same object twice");
 
         // Make the freed slot point to the previous free slot
         unsafe { (*(address as *mut u16)) = Slot::to_raw(free_head) };
@@ -180,15 +183,18 @@ impl Slab {
                 prev_partial,
             },
         );
-
-        Some(())
     }
 
-    fn class(&self, pages: &Pages) -> Option<usize> {
-        match pages.read(self.pfn) {
-            Entry::Slab { class, .. } => Some(class as usize),
-            Entry::Buddy { .. } => None,
-        }
+    fn class(&self, pages: &Pages) -> usize {
+        let Entry::Slab { class, .. } = pages.read(self.pfn) else {
+            panic!("slab page cannot have buddy page entry")
+        };
+
+        let class = class as usize;
+
+        assert!(class < CLASSES_COUNT, "slab page has an unknown size class");
+
+        class
     }
 
     fn links(&self, pages: &Pages) -> (Option<Slab>, Option<Slab>) {

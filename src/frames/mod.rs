@@ -64,7 +64,9 @@ impl Frames {
 
     pub fn free(&mut self, pages: &mut Pages, mut pfn: Pfn) {
         let mut order = match pages.read(pfn) {
-            Entry::Buddy { free: true, .. } => return,
+            Entry::Buddy { free: true, .. } => {
+                panic!("freeing already freed pfn. addr: {:#x}", pfn.to_addr())
+            }
             Entry::Buddy { order, .. } => order as usize,
             Entry::Slab { .. } => 0,
         };

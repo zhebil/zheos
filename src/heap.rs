@@ -9,7 +9,7 @@ use crate::{
     lock::SpinLock,
     memory::{
         map::MemoryMap,
-        pages::Pages,
+        pages::{Entry, Pages},
         pfn::{PAGE_SIZE, Pfn},
     },
     slab::{Cache, class_of},
@@ -60,10 +60,17 @@ impl Heap {
         }
     }
 
-    pub fn free_layout(&mut self, address: usize, layout: Layout) -> Option<()> {
-        match class_of(layout) {
-            Some(_) => self.slab_free(address),
-            None => self.free_pages(address),
+    pub fn free_layout(&mut self, address: usize, layout: Layout) {
+        let entry = self.pages.read(Pfn::from_addr_down(address));
+
+        assert!(
+            class_of(layout).is_some() == matches!(entry, Entry::Slab { .. }),
+            "free with a layout that does not match the page it points at"
+        );
+
+        match entry {
+            Entry::Slab { .. } => self.slab_free(address),
+            Entry::Buddy { .. } => self.free_pages(address),
         }
     }
 
@@ -72,10 +79,9 @@ impl Heap {
         Some(page_pfn.to_addr())
     }
 
-    fn free_pages(&mut self, address: usize) -> Option<()> {
+    fn free_pages(&mut self, address: usize) {
         self.frames
             .free(&mut self.pages, Pfn::from_addr_down(address));
-        Some(())
     }
 
     pub fn frames(&self) -> &Frames {
@@ -87,7 +93,7 @@ impl Heap {
             .alloc(&mut self.pages, &mut self.frames, class_idx)
     }
 
-    fn slab_free(&mut self, address: usize) -> Option<()> {
+    fn slab_free(&mut self, address: usize) {
         self.cache.free(&mut self.pages, &mut self.frames, address)
     }
 }

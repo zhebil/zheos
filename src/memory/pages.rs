@@ -6,12 +6,6 @@ use crate::memory::{
     region::{PageRange, Region},
 };
 
-pub struct Pages {
-    region: Region,
-    base: Pfn,
-    len: usize,
-}
-
 const ENTRY_SIZE: usize = 8;
 
 /// Indexes of Pages in the arena. 19 bits is enough until 2GiB
@@ -79,6 +73,12 @@ pub enum Entry {
         next_partial: Option<ArenaIndex>, // 19 bits
         prev_partial: Option<ArenaIndex>, // 19 bits
     },
+}
+
+pub struct Pages {
+    region: Region,
+    base: Pfn,
+    len: usize,
 }
 
 impl Pages {
@@ -153,9 +153,11 @@ impl Pages {
     }
 
     fn entry(&self, pfn: Pfn) -> *mut u64 {
-        // SAFETY: in range for any pfn inside `covers`, which is every pfn that
-        // reaches here - the free lists only ever hold arena pages, and `free`
-        // tests a buddy against `covers` before looking it up.
+        assert!(
+            self.covers().contains(pfn),
+            "pfn is out of range for this Pages"
+        );
+        // SAFETY: the caller must ensure that the pfn is within the range of this Pages, which is checked above.
         unsafe { (self.region.base as *mut u64).add(pfn.index_from(self.base)) }
     }
 }

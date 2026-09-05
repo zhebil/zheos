@@ -19,6 +19,13 @@ pub struct Frames {
 }
 
 impl Frames {
+    pub const fn empty() -> Self {
+        Self {
+            lists: FreeLists::empty(),
+            total: 0,
+        }
+    }
+
     pub fn new(map: &MemoryMap, pages: &mut Pages) -> Frames {
         let mut frames = Frames {
             lists: FreeLists::empty(),

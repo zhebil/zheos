@@ -17,6 +17,14 @@ pub struct Heap {
 }
 
 impl Heap {
+    pub const fn empty() -> Self {
+        Self {
+            pages: Pages::empty(),
+            frames: Frames::empty(),
+            cache: Cache::new(),
+        }
+    }
+
     pub fn new(map: &mut MemoryMap) -> Option<Self> {
         let mut pages = Pages::new(map)?;
         let frames = Frames::new(map, &mut pages);

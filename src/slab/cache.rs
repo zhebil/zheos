@@ -9,7 +9,7 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             heads: [None; CLASSES_COUNT],
         }

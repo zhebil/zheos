@@ -82,6 +82,14 @@ pub enum Entry {
 }
 
 impl Pages {
+    pub const fn empty() -> Self {
+        Pages {
+            region: Region::EMPTY,
+            base: Pfn::ZERO,
+            len: 0,
+        }
+    }
+
     pub fn new(map: &mut MemoryMap) -> Option<Pages> {
         let arena = map.arena();
         let len = arena.size / PAGE_SIZE;

@@ -5,6 +5,8 @@ pub const PAGE_SIZE: usize = 4096;
 pub struct Pfn(usize);
 
 impl Pfn {
+    pub const ZERO: Pfn = Pfn(0);
+
     pub fn to_addr(self) -> usize {
         self.0 * PAGE_SIZE
     }

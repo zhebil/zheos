@@ -1,12 +1,15 @@
 #![no_std]
 #![no_main]
 
-use core::{alloc::Layout, num::NonZeroU32, time::Duration};
+extern crate alloc;
+
+use alloc::vec::Vec;
+use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
     frames::MAX_ORDER,
-    heap::Heap,
+    heap::HEAP,
     memory::{image, map::MemoryMap, region::Region},
     mmu::{Table, descriptor::Descriptor},
     uart::uart,
@@ -105,36 +108,49 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         println!("No room to reserve the kernel image and the device tree");
         halt();
     }
-
-    let Some(mut heap) = Heap::new(&mut map) else {
-        println!("No room for the page metadata, or the arena is too large to index");
-        halt();
-    };
+    HEAP.init(&mut map);
 
     for region in map.reserved() {
         println!("reserved: {region}");
     }
 
     for order in 0..=MAX_ORDER {
-        let blocks = heap.frames().free_blocks(order);
+        let blocks = HEAP.with(|h| h.frames().free_blocks(order));
 
         if blocks > 0 {
             println!("order {order}: {blocks} x {} pages", 1usize << order);
         }
     }
 
-    println!("heap: {heap}");
+    HEAP.with(|h| {
+        println!("heap: {h}");
+    });
 
-    let small = Layout::new::<[u8; 64]>();
-    let large = Layout::new::<[u8; 9000]>();
+    let mut counted = Vec::new();
 
-    if let (Some(a), Some(b)) = (heap.alloc_layout(small), heap.alloc_layout(large)) {
-        heap.free_layout(a, small);
-        heap.free_layout(b, large);
+    for i in 0..10u32 {
+        counted.push(i);
     }
 
-    let Some(mut table) = Table::new(&mut heap) else {
-        println!("No room for a translation table");
+    println!(
+        "vec: len {} cap {} sum {}",
+        counted.len(),
+        counted.capacity(),
+        counted.iter().sum::<u32>()
+    );
+
+    HEAP.with(|h| {
+        println!("heap: {h} with the vec live");
+    });
+
+    drop(counted);
+
+    HEAP.with(|h| {
+        println!("heap: {h}");
+    });
+
+    let Some(mut table) = HEAP.with(Table::new) else {
+        println!("No room to allocate a page table");
         halt();
     };
 
@@ -144,17 +160,17 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         size: board.memory.base,
     };
 
-    // Halting on failure rather than carrying on: a half-built table is worse
-    // than a stop, because the next step turns the MMU on and walks it.
-    if let Err(error) = table.identity_map(&mut heap, devices, Descriptor::DEVICE_BLOCK) {
-        println!("Failed to map devices: {error}");
-        halt();
-    }
+    HEAP.with(|h| {
+        if let Err(error) = table.identity_map(h, devices, Descriptor::DEVICE_BLOCK) {
+            println!("Failed to map devices: {error}");
+            halt();
+        }
 
-    if let Err(error) = table.identity_map(&mut heap, board.memory, Descriptor::NORMAL_BLOCK) {
-        println!("Failed to map memory: {error}");
-        halt();
-    }
+        if let Err(error) = table.identity_map(h, board.memory, Descriptor::NORMAL_BLOCK) {
+            println!("Failed to map memory: {error}");
+            halt();
+        }
+    });
 
     println!("mair_el1: {:b}", cpu::mmu::read_mair_el1());
     println!("tcr_el1: {:b}", cpu::mmu::read_tcr_el1());
@@ -166,7 +182,10 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("sctlr_el1: {:b}", cpu::mmu::read_sctlr_el1());
 
     println!("table: {:#012x}", table.base());
-    println!("heap: {heap}");
+
+    HEAP.with(|h| {
+        println!("heap: {h}");
+    });
 
     println!("0x0900_0000 -> {:?}", table.translate(0x0900_0000));
     println!("0x4008_0000 -> {:?}", table.translate(0x4008_0000));

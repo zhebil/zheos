@@ -1,7 +1,12 @@
-use core::{alloc::Layout, cmp::max, fmt::Display};
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    cmp::max,
+    fmt::Display,
+};
 
 use crate::{
     frames::Frames,
+    lock::SpinLock,
     memory::{
         map::MemoryMap,
         pages::Pages,
@@ -25,16 +30,21 @@ impl Heap {
         }
     }
 
-    pub fn new(map: &mut MemoryMap) -> Option<Self> {
-        let mut pages = Pages::new(map)?;
+    pub fn init(&mut self, map: &mut MemoryMap) {
+        if self.pages.len() != 0 {
+            // Heap was already initialized, do not reinitialize it.
+            return;
+        }
+        let Some(mut pages) = Pages::new(map) else {
+            panic!("Failed to initialize heap pages");
+        };
+
         let frames = Frames::new(map, &mut pages);
         let cache = Cache::new();
 
-        Some(Self {
-            pages,
-            frames,
-            cache,
-        })
+        self.pages = pages;
+        self.frames = frames;
+        self.cache = cache;
     }
 
     pub fn alloc_layout(&mut self, layout: Layout) -> Option<usize> {
@@ -85,5 +95,35 @@ impl Heap {
 impl Display for Heap {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.frames)
+    }
+}
+
+#[global_allocator]
+pub static HEAP: SpinLock<Heap> = SpinLock::new(Heap::empty());
+
+impl SpinLock<Heap> {
+    pub fn init(&self, map: &mut MemoryMap) {
+        let mut heap = self.lock();
+        heap.init(map);
+    }
+
+    pub fn with<R>(&self, f: impl FnOnce(&mut Heap) -> R) -> R {
+        let mut heap = self.lock();
+        f(&mut heap)
+    }
+}
+
+unsafe impl GlobalAlloc for SpinLock<Heap> {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let mut heap = self.lock();
+        match heap.alloc_layout(layout) {
+            Some(addr) => addr as *mut u8,
+            None => core::ptr::null_mut(),
+        }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let mut heap = self.lock();
+        heap.free_layout(ptr as usize, layout);
     }
 }

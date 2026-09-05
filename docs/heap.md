@@ -177,7 +177,7 @@ a comment arguing for it. Read it as the thing you are *not* doing here.
 
 ### A `static` is built at compile time, the allocator is built at boot
 
-`static ALLOCATOR: ... = ...;` is baked into the image. But `Pages` has to find its own storage in
+`static HEAP: SpinLock<Heap> = ...;` is baked into the image. But `Pages` has to find its own storage in
 the `MemoryMap`, and `Frames` has to be seeded from the map's unreserved runs, and neither of
 those exists until `kmain` is running.
 
@@ -191,9 +191,11 @@ The better shape is a static that is **always** there, born empty, given its mem
   `Region::EMPTY` are const already, so you need `Pages::empty()`, `Frames::empty()`, `const` on
   the existing `Cache::new`, and `Heap::empty()` calling all three.
 - `init` then fills in the fields rather than installing a value. It is today's `Heap::new` with
-  its `Option<Self>` turned into `&mut self` and `Option<()>`, and one guard on the front:
-  `self.pages.len() != 0` means it has already run. That one compare buys back the double-init
-  detection `Option` would have given you.
+  its `Option<Self>` turned into `&mut self`, and one guard on the front: `self.pages.len() != 0`
+  means it has already run. That one compare buys back the double-init detection `Option` would
+  have given you. Build `Pages::new(map)` into a local and only assign once it succeeds - writing
+  into `self.pages` before the failure path leaves a half-built heap the guard will then refuse to
+  repair.
 
 An allocation before `init` therefore panics with `memory allocation of N bytes failed`. That is a
 good failure: it names itself, at the line that did it, instead of writing over address zero.
@@ -203,12 +205,16 @@ it out as `&mut`. Once the static owns it, there is no local to lend, and everyt
 one borrows through the static:
 
 ```
-heap::with(|heap| ...)
+HEAP.with(|heap| ...)
 ```
 
 `Table::new`, `identity_map` and `map_range` keep their `&mut Heap` parameters unchanged - only
-their call sites move. `Table::new(&mut heap)` becomes `heap::with(Table::new)`, and the two
+their call sites move. `Table::new(&mut heap)` becomes `HEAP.with(Table::new)`, and the two
 `identity_map` calls wrap the same way.
+
+Write `with` as `self.lock()`, not `HEAP.lock()`. Reaching for the static from inside a method that
+already has `&self` works only while exactly one `SpinLock<Heap>` exists, and the day a second one
+does it deadlocks with nothing on screen to say why.
 
 **One hazard, and it is the deadlock from LOCK.** The closure passed to `with` holds the guard for
 its whole body, and `identity_map` allocates page after page as it walks. That is fine, and only
@@ -294,19 +300,25 @@ changes at every place that touches the heap.
 
 At the top of `src/heap.rs`:
 
-- `static ALLOCATOR: Allocator = Allocator::new();` carrying `#[global_allocator]`.
-- a newtype wrapping the lock - `struct Allocator(SpinLock<Heap>)` - with a `const fn new()`
-  building it from `Heap::empty()`. It costs nothing at runtime and gives the trait a type of its
-  own to hang on.
-- `unsafe impl GlobalAlloc for Allocator`, with `alloc` and `dealloc`, each taking the guard for
-  the length of one call and forwarding to `alloc_layout` and `free_layout`.
-- `pub fn init(map: &mut MemoryMap) -> Option<()>` and `pub fn with<R>(f: impl FnOnce(&mut Heap)
-  -> R) -> R`, the two doors into the static. `with` is what replaces `kmain`'s local.
+- `static HEAP: SpinLock<Heap> = SpinLock::new(Heap::empty());` carrying `#[global_allocator]`.
+- `unsafe impl GlobalAlloc for SpinLock<Heap>`, with `alloc` and `dealloc`, each taking the guard
+  for the length of one call and forwarding to `alloc_layout` and `free_layout`.
+- `impl SpinLock<Heap>` with `init` and `with`, the two doors into the static. `with` is what
+  replaces `kmain`'s local.
+
+**No newtype.** The trait needs *a* type to hang on, and `SpinLock<Heap>` is already one of yours,
+so implementing a foreign trait for it is the allowed direction and no wrapper is needed. It cannot
+go on `Heap` itself, because `GlobalAlloc::alloc` takes `&self` and `alloc_layout` takes
+`&mut self`. Linux has no wrapper here either: `kmalloc` is a plain function over the static
+`kmalloc_caches` table, and the global-ness comes from the linker symbol. Rust only makes you name
+a type because `#[global_allocator]` attaches to a trait impl. A wrapper earns its place the day
+there is more than one heap to choose between - per-CPU or per-node, where Linux grows
+`kmem_cache_cpu` and `kmem_cache_node`.
 
 Inside `impl Heap`:
 
-- `const fn empty()`, and `fn init(&mut self, map: &mut MemoryMap) -> Option<()>` replacing today's
-  `new`, guarded as section 6 describes.
+- `const fn empty()`, and `fn init(&mut self, map: &mut MemoryMap)` replacing today's `new`,
+  guarded as section 6 describes.
 
 Elsewhere:
 
@@ -333,9 +345,9 @@ heap. Current `kmain`, from `src/main.rs:99`, with the new steps folded in:
 
 1. `MemoryMap::new(board.memory)` and the two `map.reserve` calls for the image and the device
    tree - the arena and the reservations exist.
-2. **`heap::init(&mut map)`** - `Pages` finds its own storage and reserves it, `Frames` seeds
+2. **`HEAP.init(&mut map)`** - `Pages` finds its own storage and reserves it, `Frames` seeds
    itself from what is left, `Cache` starts empty. `Vec` starts working here.
-3. `heap::with(Table::new)` and two `identity_map` calls - the tables exist, built out of pages
+3. `HEAP.with(Table::new)` and two `identity_map` calls - the tables exist, built out of pages
    the heap handed over.
 4. `mmu::enable(&mut table)` - translation is on.
 
@@ -362,7 +374,7 @@ faults with an Alignment fault: **ESR**, **E**xception **S**yndrome **R**egister
 | link fails, undefined symbol ending `__rust_no_alloc_shim_is_unstable_v2`                | `extern crate alloc` is there but `#[global_allocator]` is not, or it is behind a `cfg` that is off in this build. The marker symbol exists to make exactly this a link error instead of a mystery.                            |
 | link fails, undefined `__rust_alloc`                                                     | same cause. These two always appear together.                                                                                                                                                                                  |
 | `error: use of unstable library feature 'alloc_error_handler'`                            | you added `#[alloc_error_handler]`. Delete it. The default has shipped since 1.68 and it is what produces the message in the next row.                                                                                          |
-| `memory allocation of N bytes failed` at the first `push` on the machine                 | `alloc` returned null. Either `heap::init` never ran, or it ran after the allocation, or memory really is exhausted. Print the heap's `Display` to tell which.                                                                 |
+| `memory allocation of N bytes failed` at the first `push` on the machine                 | `alloc` returned null. Either `HEAP.init` never ran, or it ran after the allocation, or memory really is exhausted. Print the heap's `Display` to tell which.                                                                 |
 | the machine stops dead on the first allocation, no output                                | `alloc` allocated. A `println!`, a formatted error, or any bookkeeping inside the allocator takes the lock the current call already holds. Section 9.                                                                          |
 | the machine stops dead inside `identity_map`                                             | something in that `with` closure allocated through the static instead of through the `&mut Heap` it was handed. Same lock, same stop. Section 6.                                                                               |
 | free pages drop and never come back                                                      | `dealloc` is reaching the wrong layer - freeing to `Frames` what `Cache` handed out, or the reverse. `class_of` decides which, and it has to make the same decision in `free_layout` that it made in `alloc_layout`.           |
@@ -371,7 +383,7 @@ faults with an Alignment fault: **ESR**, **E**xception **S**yndrome **R**egister
 | data abort, ESR DFSC `0x21`, before `mmu::enable`                                        | an unaligned access with the MMU still off, so all memory is Device memory. Section 10.                                                                                                                                        |
 | the machine stops dead the first time a handler allocates                                | recursion into the lock, as above, or a lock taken without masking. LOCK section 3.                                                                                                                                            |
 | everything works, `.text` grew by several kilobytes                                      | expected, and not from the allocator. `Box` and `Vec` pull in `raw_vec`, its overflow checks and its error path.                                                                                                               |
-| `heap::init` returns `None` on a second call                                             | the guard doing its job. Something calls it twice; find the second caller rather than removing the guard.                                                                                                                     |
+| `HEAP.init` silently does nothing                                                        | the `pages.len() != 0` guard doing its job on a second call. Something calls it twice; find the second caller rather than removing the guard.                                                                                 |
 
 ## 12. How you will know it worked
 
@@ -381,10 +393,10 @@ print the heap's `Display` before the vector exists, while it is alive, and afte
 The output that means it worked, as it actually came out on this machine:
 
 ```
-heap: 32430 of 32768 pages free
+heap: 32429 of 32768 pages free
 vec: len 10 cap 16 sum 45
-heap: 32429 of 32768 pages free with the vec live
-heap: 32430 of 32768 pages free
+heap: 32428 of 32768 pages free with the vec live
+heap: 32429 of 32768 pages free
 ```
 
 Read it line by line:
@@ -400,7 +412,8 @@ Read it line by line:
   in this project that memory has ever come back.
 - `make run` still reaches the monitor prompt afterwards, which proves nothing was written over.
 
-The absolute 32430 moves whenever the image, the device tree or the metadata table changes size.
+The absolute 32429 moves whenever the image, the device tree or the metadata table changes size -
+adding the `{:?}` on a `Layout` to a probe once cost a whole page by itself.
 The two deltas are the observable, not it.
 
 Then take one number away from it. Set the arena smaller than the vector needs and boot again: the

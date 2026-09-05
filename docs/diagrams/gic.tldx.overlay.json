@@ -1,0 +1,129 @@
+{
+  "v": 1,
+  "basedOn": "c409191a",
+  "entries": {
+    "binding:37e43469-0-end": {
+      "restyled": {
+        "normalizedAnchor": {
+          "x": 0.5000000000000006,
+          "y": 0.5
+        },
+        "isExact": false,
+        "snap": "center"
+      }
+    },
+    "shape:devices": {
+      "moved": {
+        "x": 246.13159667661586,
+        "y": 298.69558356117545
+      }
+    },
+    "shape:58305191-0": {
+      "restyled": {
+        "richText": {
+          "type": "doc",
+          "attrs": {
+            "dir": "auto"
+          },
+          "content": [
+            {
+              "type": "paragraph",
+              "attrs": {
+                "dir": "auto"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "1. a byte arrives, "
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "attrs": {
+                "dir": "auto"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "the line goes high"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "shape:35f71e5b-0": {
+      "restyled": {
+        "bend": 6.0686084727491885
+      }
+    },
+    "shape:37e43469-0": {
+      "restyled": {
+        "bend": 0.5180893337365317
+      }
+    },
+    "shape:timer": {
+      "restyled": {
+        "richText": {
+          "type": "doc",
+          "attrs": {
+            "dir": "auto"
+          },
+          "content": [
+            {
+              "type": "paragraph",
+              "attrs": {
+                "dir": "auto"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "generic timer"
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "attrs": {
+                "dir": "auto"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "intid 30"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "binding:ceaff3a4-0-start": {
+      "restyled": {
+        "normalizedAnchor": {
+          "x": 0.5000000000000006,
+          "y": 0.5
+        },
+        "isExact": false,
+        "snap": "center"
+      }
+    },
+    "binding:35f71e5b-0-end": {
+      "restyled": {
+        "normalizedAnchor": {
+          "x": 0.5000000000000006,
+          "y": 0.5
+        },
+        "isExact": false,
+        "snap": "center"
+      }
+    },
+    "shape:ceaff3a4-0": {
+      "restyled": {
+        "bend": -15.877560976969711
+      }
+    }
+  }
+}

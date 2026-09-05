@@ -23,9 +23,7 @@ impl<T: Copy> RingBuffer<T> {
         if self.full {
             return;
         }
-        // The mask is redundant - tail is always in range - but it is what lets
-        // LLVM drop the bounds check, and it folds into the addressing mode for
-        // free. Removing it costs four instructions and a panic call site.
+
         self.buffer[self.tail % RING_BUFFER_SIZE] = value;
         self.tail = (self.tail + 1) % RING_BUFFER_SIZE;
         self.full = self.tail == self.head;

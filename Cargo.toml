@@ -9,3 +9,11 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 debug = true
+
+[[bin]]
+name = "zheos"
+path = "src/main.rs"
+# No libtest for aarch64-unknown-none-softfloat, and panic="abort" is
+# incompatible with the default harness - so don't generate test/bench targets.
+test = false
+bench = false

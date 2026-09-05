@@ -1,0 +1,78 @@
+{
+  "v": 1,
+  "basedOn": "49460769",
+  "entries": {
+    "shape:e9419a09-0": {
+      "restyled": {
+        "bend": 5.554784788234315
+      }
+    },
+    "binding:42ed49a1-0-end": {
+      "restyled": {
+        "normalizedAnchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "isExact": false,
+        "snap": "center"
+      }
+    },
+    "binding:527a8b68-0-end": {
+      "restyled": {
+        "normalizedAnchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "isExact": false,
+        "snap": "center"
+      }
+    },
+    "shape:f13ce455-0": {
+      "restyled": {
+        "bend": 2.02689484801067
+      }
+    },
+    "shape:6f6e7cbf-0": {
+      "restyled": {
+        "kind": "elbow",
+        "bend": 102.28903033344041
+      }
+    },
+    "binding:073fbeab-0-end": {
+      "restyled": {
+        "normalizedAnchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "isExact": false,
+        "snap": "center"
+      }
+    },
+    "shape:527a8b68-0": {
+      "restyled": {
+        "kind": "elbow",
+        "bend": -132.78599301528791
+      }
+    },
+    "binding:073fbeab-0-start": {
+      "restyled": {
+        "normalizedAnchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "isExact": false,
+        "snap": "center"
+      }
+    },
+    "binding:f8527780-0-start": {
+      "restyled": {
+        "normalizedAnchor": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "isExact": false,
+        "snap": "center"
+      }
+    }
+  }
+}

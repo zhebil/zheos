@@ -82,6 +82,10 @@ means five boundaries; three segments means two. Linux does the same and calls t
 *segments*, matching the `PT_LOAD` entries of an ELF file - `_stext`/`_etext` bound one, `_sdata`
 through `.bss` another.
 
+`docs/diagrams/lockdown.tldx.jsx` draws the finished map - the image top to bottom with each
+segment's permissions, the unmapped guard page, and what the descriptor field is that says each
+letter. Run `tldx serve` on it.
+
 Two rows carry the whole skill.
 
 **`.vectors` is executable.** It is easy to miss because it is not called `.text`, but it holds the

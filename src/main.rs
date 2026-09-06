@@ -11,8 +11,8 @@ use crate::{
     frames::MAX_ORDER,
     heap::HEAP,
     memory::{
-        bss, data, executable, image, map::MemoryMap, region::Region, rodata, stack, text, vectors,
-        writable,
+        bss, data, executable, image, map::MemoryMap, region::Region, rodata, stack, stack_guard,
+        text, vectors, writable_data,
     },
     mmu::{Table, descriptor::Descriptor},
     uart::uart,
@@ -103,10 +103,11 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("    text:    {}", text());
     println!("    vectors: {}", vectors());
     println!("  rodata:   {}", rodata());
-    println!("  writable: {}", writable());
+    println!("  writable: {}", writable_data());
     println!("    data:   {}", data());
     println!("    bss:    {}", bss());
-    println!("    stack:  {}", stack());
+    println!("  guard:    {}", stack_guard());
+    println!("  stack:    {}", stack());
     println!("dtb: {}", dtb.region());
     println!("memory: {}", board.memory);
 
@@ -177,8 +178,13 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
             halt();
         }
 
-        if let Err(error) = table.identity_map(h, writable(), Descriptor::WRITABLE) {
+        if let Err(error) = table.identity_map(h, writable_data(), Descriptor::WRITABLE) {
             println!("Failed to map writable: {error}");
+            halt();
+        }
+
+        if let Err(error) = table.identity_map(h, stack(), Descriptor::WRITABLE) {
+            println!("Failed to map stack: {error}");
             halt();
         }
 

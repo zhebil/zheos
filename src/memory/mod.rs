@@ -14,6 +14,7 @@ unsafe extern "C" {
     static __rodata_end: u8;
     static __data_end: u8;
     static __bss_start: u8;
+    static __stack_guard_start: u8;
     static __stack_bottom: u8;
     static __stack_top: u8;
 }
@@ -44,8 +45,14 @@ pub fn rodata() -> Region {
 
 /// Everything the kernel writes: data, zeroed data, and the stack.
 /// Writable and never executed.
-pub fn writable() -> Region {
-    between(&raw const __rodata_end, &raw const __stack_top)
+pub fn writable_data() -> Region {
+    between(&raw const __rodata_end, &raw const __stack_guard_start)
+}
+
+/// The unmapped page below the stack. Nothing maps it, so a stack that
+/// overflows faults here instead of running on into .bss.
+pub fn stack_guard() -> Region {
+    between(&raw const __stack_guard_start, &raw const __stack_bottom)
 }
 
 /// Instructions alone. Inside [`executable`], for reporting only.
@@ -58,17 +65,17 @@ pub fn vectors() -> Region {
     between(&raw const __vectors_start, &raw const __vectors_end)
 }
 
-/// Initialised data. Inside [`writable`].
+/// Initialised data. Inside [`writable_data`].
 pub fn data() -> Region {
     between(&raw const __rodata_end, &raw const __data_end)
 }
 
-/// Zeroed data. Inside [`writable`].
+/// Zeroed data. Inside [`writable_data`].
 pub fn bss() -> Region {
-    between(&raw const __bss_start, &raw const __stack_bottom)
+    between(&raw const __bss_start, &raw const __stack_guard_start)
 }
 
-/// The kernel stack. Inside [`writable`].
+/// The kernel stack. Mapped on its own, above the guard page.
 pub fn stack() -> Region {
     between(&raw const __stack_bottom, &raw const __stack_top)
 }

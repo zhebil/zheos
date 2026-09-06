@@ -1,18 +1,18 @@
-import { Doc, Row, Text } from "tldx";
+import { Doc, Row, Text, Edge } from "tldx";
 
-import { ImageMap } from "./lockdown/image-map.jsx";
-import { Elsewhere } from "./lockdown/elsewhere.jsx";
-import { Legend } from "./lockdown/legend.jsx";
+import { Kinds } from "./lockdown/kinds.jsx";
+import { Ram, Image } from "./lockdown/map.jsx";
 
 export default function Diagram() {
   return (
-    <Doc title="Lockdown: what each part of memory is allowed to do" layout="col" gap="90">
-      <Text size="xl">Every byte was rw-x. Now each region gets only what it needs.</Text>
-      <Row id="top" gap="110" align="start">
-        <ImageMap ns="im" />
-        <Elsewhere ns="el" />
-        <Legend ns="lg" />
+    <Doc title="Lockdown: colour is the permission" layout="col" gap="60">
+      <Text size="xl">Every byte used to be readable, writable and executable. Now the colour is the rule.</Text>
+      <Kinds ns="lk" />
+      <Row id="maps" gap="170" align="start">
+        <Ram ns="lk" />
+        <Image ns="lk" />
       </Row>
+      <Edge from="lk-r-img" to="lk-img" fromSide="right" toSide="top-left" dash="dashed" label="zoom" />
     </Doc>
   );
 }

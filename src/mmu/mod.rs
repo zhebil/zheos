@@ -24,19 +24,17 @@ const SLOT_MASK: usize = SLOTS - 1;
 /// two sizes agree.
 const _: () = assert!(SLOTS * size_of::<u64>() == PAGE_SIZE);
 
-pub struct PlanError {
-    pub name: &'static str,
-    pub error: MapError,
+pub enum PlanError {
+    Failed { name: &'static str, error: MapError },
+    Overlap(&'static str, &'static str),
 }
 
 impl Display for PlanError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "failed to map {name}: {error}",
-            name = self.name,
-            error = self.error
-        )
+        match self {
+            Self::Failed { name, error } => write!(f, "failed to map {name}: {error}"),
+            Self::Overlap(one, other) => write!(f, "{one} and {other} claim the same memory"),
+        }
     }
 }
 
@@ -94,7 +92,7 @@ impl Table {
 
     /// Map `region` so that every virtual address in it equals its own physical
     /// address, with `template` supplying everything but the address and the kind.
-    pub fn identity_map(
+    fn identity_map(
         &mut self,
         heap: &mut Heap,
         region: Region,
@@ -120,20 +118,29 @@ impl Table {
         plan: &[Mapping],
         fill: Descriptor,
     ) -> Result<(), PlanError> {
+        for (i, one) in plan.iter().enumerate() {
+            for other in &plan[i + 1..] {
+                if one.region.base < other.region.end() && other.region.base < one.region.end() {
+                    return Err(PlanError::Overlap(one.name, other.name));
+                }
+            }
+        }
+
         for mapping in plan {
             if let Some(template) = mapping.template {
                 self.identity_map(heap, mapping.region, template)
-                    .map_err(|e| PlanError {
+                    .map_err(|error| PlanError::Failed {
                         name: mapping.name,
-                        error: e,
+                        error,
                     })?
             }
         }
+
         for gap in gaps(arena, plan.iter().map(|m| m.region)) {
             self.identity_map(heap, gap.region(), fill)
-                .map_err(|e| PlanError {
+                .map_err(|error| PlanError::Failed {
                     name: "unclaimed memory",
-                    error: e,
+                    error,
                 })?
         }
 

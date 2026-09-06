@@ -47,7 +47,8 @@ const TCR_EL1: u64 = (T0SZ << bits::T0SZ)
 const SCTLR_M: u64 = 1 << 0;
 const SCTLR_C: u64 = 1 << 2;
 const SCTLR_I: u64 = 1 << 12;
-const SCTLR_EL1: u64 = SCTLR_M | SCTLR_C | SCTLR_I;
+const SCTLR_WXN: u64 = 1 << 19;
+const SCTLR_EL1: u64 = SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_WXN;
 
 pub fn init(table: &mut Table) {
     let t_base = table.base();

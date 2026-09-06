@@ -64,6 +64,48 @@ impl Descriptor {
         uxn: true,
     };
 
+    pub const EXECUTABLE: Descriptor = Descriptor {
+        kind: Kind::Block,
+        attr_idx: AttrIndex::Normal,
+        ns: false,
+        ap: AccessPermissions::KernelReadWrite,
+        sh: SH::InnerShareable,
+        af: true,
+        ng: false,
+        address: 0x4000_0000,
+        contig: false,
+        pxn: false,
+        uxn: true,
+    };
+
+    pub const READ_ONLY: Descriptor = Descriptor {
+        kind: Kind::Block,
+        attr_idx: AttrIndex::Normal,
+        ns: false,
+        ap: AccessPermissions::KernelReadWrite,
+        sh: SH::InnerShareable,
+        af: true,
+        ng: false,
+        address: 0x4000_0000,
+        contig: false,
+        pxn: false,
+        uxn: true,
+    };
+
+    pub const WRITABLE: Descriptor = Descriptor {
+        kind: Kind::Block,
+        attr_idx: AttrIndex::Normal,
+        ns: false,
+        ap: AccessPermissions::KernelReadWrite,
+        sh: SH::InnerShareable,
+        af: true,
+        ng: false,
+        address: 0x4000_0000,
+        contig: false,
+        pxn: false,
+        uxn: true,
+    };
+
     pub const fn from_u64(value: u64) -> Self {
         Descriptor {
             kind: Kind::from_u64(value),

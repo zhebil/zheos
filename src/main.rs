@@ -172,13 +172,28 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     };
 
     HEAP.with(|h| {
-        if let Err(error) = table.identity_map(h, devices, Descriptor::DEVICE_BLOCK) {
-            println!("Failed to map devices: {error}");
+        if let Err(error) = table.identity_map(h, executable(), Descriptor::EXECUTABLE) {
+            println!("Failed to map executable: {error}");
+            halt();
+        }
+
+        if let Err(error) = table.identity_map(h, writable(), Descriptor::WRITABLE) {
+            println!("Failed to map writable: {error}");
+            halt();
+        }
+
+        if let Err(error) = table.identity_map(h, rodata(), Descriptor::READ_ONLY) {
+            println!("Failed to map read-only data: {error}");
             halt();
         }
 
         if let Err(error) = table.identity_map(h, board.memory, Descriptor::NORMAL_BLOCK) {
             println!("Failed to map memory: {error}");
+            halt();
+        }
+
+        if let Err(error) = table.identity_map(h, devices, Descriptor::DEVICE_BLOCK) {
+            println!("Failed to map devices: {error}");
             halt();
         }
     });

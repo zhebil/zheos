@@ -31,7 +31,9 @@ pub struct Descriptor {
     /// low 30 bits zero, a level 2 block its low 21, a level 3 page its low 12.
     pub address: usize,
     pub contig: bool,
+    /// Throw when try to execute from kernel
     pub pxn: bool,
+    /// Throw when try to execute from userspace
     pub uxn: bool,
 }
 
@@ -68,7 +70,7 @@ impl Descriptor {
         kind: Kind::Block,
         attr_idx: AttrIndex::Normal,
         ns: false,
-        ap: AccessPermissions::KernelReadWrite,
+        ap: AccessPermissions::KernelReadOnly,
         sh: SH::InnerShareable,
         af: true,
         ng: false,
@@ -82,13 +84,13 @@ impl Descriptor {
         kind: Kind::Block,
         attr_idx: AttrIndex::Normal,
         ns: false,
-        ap: AccessPermissions::KernelReadWrite,
+        ap: AccessPermissions::KernelReadOnly,
         sh: SH::InnerShareable,
         af: true,
         ng: false,
         address: 0x4000_0000,
         contig: false,
-        pxn: false,
+        pxn: true,
         uxn: true,
     };
 
@@ -102,7 +104,7 @@ impl Descriptor {
         ng: false,
         address: 0x4000_0000,
         contig: false,
-        pxn: false,
+        pxn: true,
         uxn: true,
     };
 

@@ -1,3 +1,4 @@
+pub mod gaps;
 pub mod map;
 pub mod pages;
 pub mod pfn;

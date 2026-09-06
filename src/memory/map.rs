@@ -1,5 +1,6 @@
 use crate::memory::{
-    pfn::{PAGE_SIZE, Pfn},
+    gaps::gaps,
+    pfn::PAGE_SIZE,
     region::{PageRange, Region},
 };
 
@@ -41,52 +42,12 @@ impl MemoryMap {
         Ok(())
     }
 
-    pub fn reserved(&self) -> impl Iterator<Item = Region> {
+    pub fn reserved(&self) -> impl Iterator<Item = Region> + Clone {
         self.reserved.iter().take(self.len).copied()
     }
 
     pub fn unreserved(&self) -> impl Iterator<Item = PageRange> {
-        let mut cursor = Pfn::from_addr_up(self.arena.base);
-        let end = Pfn::from_addr_down(self.arena.end());
-
-        core::iter::from_fn(move || {
-            while let Some(stop) = self.containing(cursor) {
-                cursor = stop;
-            }
-
-            if cursor >= end {
-                return None;
-            }
-
-            let run = PageRange {
-                start: cursor,
-                end: self.next_base_above(cursor).unwrap_or(end).min(end),
-            };
-
-            cursor = run.end;
-
-            Some(run)
-        })
-    }
-
-    fn ranges(&self) -> impl Iterator<Item = PageRange> {
-        let arena = self.arena;
-
-        self.reserved()
-            .filter_map(move |region| PageRange::new(region, arena))
-    }
-
-    fn containing(&self, pfn: Pfn) -> Option<Pfn> {
-        self.ranges()
-            .find(|range| range.contains(pfn))
-            .map(|range| range.end)
-    }
-
-    fn next_base_above(&self, pfn: Pfn) -> Option<Pfn> {
-        self.ranges()
-            .filter(|range| range.start > pfn)
-            .map(|range| range.start)
-            .min()
+        gaps(self.arena, self.reserved())
     }
 }
 

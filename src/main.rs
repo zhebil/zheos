@@ -14,7 +14,7 @@ use crate::{
         bss, data, executable, image, map::MemoryMap, region::Region, rodata, stack, stack_guard,
         text, vectors, writable_data,
     },
-    mmu::{Table, descriptor::Descriptor},
+    mmu::{Table, descriptor::Descriptor, policy::Mapping},
     uart::uart,
 };
 
@@ -172,59 +172,49 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
         size: board.memory.base,
     };
 
+    // Every region that gets permissions of its own, plus the guard page
+    let plan = [
+        Mapping {
+            name: "text and vectors",
+            region: executable(),
+            template: Some(Descriptor::EXECUTABLE),
+        },
+        Mapping {
+            name: "rodata",
+            region: rodata(),
+            template: Some(Descriptor::READ_ONLY),
+        },
+        Mapping {
+            name: "data and bss",
+            region: writable_data(),
+            template: Some(Descriptor::WRITABLE),
+        },
+        Mapping {
+            name: "stack guard",
+            region: stack_guard(),
+            template: None,
+        },
+        Mapping {
+            name: "stack",
+            region: stack(),
+            template: Some(Descriptor::WRITABLE),
+        },
+        Mapping {
+            name: "device tree",
+            region: dtb.region(),
+            template: Some(Descriptor::READ_ONLY),
+        },
+    ];
+
     HEAP.with(|h| {
-        if let Err(error) = table.identity_map(h, executable(), Descriptor::EXECUTABLE) {
-            println!("Failed to map executable: {error}");
+        if let Err(error) = table.apply(h, board.memory, &plan, Descriptor::NORMAL_BLOCK) {
+            println!("{error}");
             halt();
         }
 
-        if let Err(error) = table.identity_map(h, writable_data(), Descriptor::WRITABLE) {
-            println!("Failed to map writable: {error}");
-            halt();
-        }
-
-        if let Err(error) = table.identity_map(h, stack(), Descriptor::WRITABLE) {
-            println!("Failed to map stack: {error}");
-            halt();
-        }
-
-        if let Err(error) = table.identity_map(h, rodata(), Descriptor::READ_ONLY) {
-            println!("Failed to map read-only data: {error}");
-            halt();
-        }
-
-        println!(
-            "after the segments: {:?}",
-            table.translate_with_level(image().base)
-        );
-
-        let memory_before_image = Region {
-            base: board.memory.base,
-            size: image().base - board.memory.base,
-        };
-
-        let memory_after_image = Region {
-            base: image().end(),
-            size: board.memory.end() - image().end(),
-        };
-
-        if let Err(error) = table.identity_map(h, memory_before_image, Descriptor::NORMAL_BLOCK) {
-            println!("Failed to map memory: {error}");
-            halt();
-        }
-
-        if let Err(error) = table.identity_map(h, memory_after_image, Descriptor::NORMAL_BLOCK) {
-            println!("Failed to map memory: {error}");
-            halt();
-        }
-
-        println!(
-            "after board.memory: {:?}",
-            table.translate_with_level(image().base)
-        );
-
-        if let Err(error) = table.identity_map(h, devices, Descriptor::DEVICE_BLOCK) {
-            println!("Failed to map devices: {error}");
+        // No plan of its own: every device on the machine is one 1 GiB block.
+        if let Err(error) = table.apply(h, devices, &[], Descriptor::DEVICE_BLOCK) {
+            println!("{error}");
             halt();
         }
     });
@@ -239,6 +229,14 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("sctlr_el1: {:b}", cpu::mmu::read_sctlr_el1());
 
     println!("table: {:#012x}", table.base());
+
+    for mapping in &plan {
+        println!(
+            "  {}: {:x?}",
+            mapping.name,
+            table.translate_with_level(mapping.region.base)
+        );
+    }
 
     HEAP.with(|h| {
         println!("heap: {h}");

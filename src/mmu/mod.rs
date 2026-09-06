@@ -2,16 +2,18 @@ use core::{alloc::Layout, fmt::Display, ptr::NonNull};
 
 use crate::{
     heap::Heap,
-    memory::{pfn::PAGE_SIZE, region::Region},
+    memory::{gaps::gaps, pfn::PAGE_SIZE, region::Region},
     mmu::{
         descriptor::{Descriptor, Kind},
         level::Level,
+        policy::Mapping,
     },
 };
 
 pub mod descriptor;
 mod init;
 pub mod level;
+pub mod policy;
 
 const SLOTS: usize = 512;
 const SLOT_MASK: usize = SLOTS - 1;
@@ -21,6 +23,22 @@ const SLOT_MASK: usize = SLOTS - 1;
 /// rather than assumed, so the guarantee is in the request - but only while the
 /// two sizes agree.
 const _: () = assert!(SLOTS * size_of::<u64>() == PAGE_SIZE);
+
+pub struct PlanError {
+    pub name: &'static str,
+    pub error: MapError,
+}
+
+impl Display for PlanError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "failed to map {name}: {error}",
+            name = self.name,
+            error = self.error
+        )
+    }
+}
 
 pub enum MapError {
     OutOfMemory,
@@ -93,6 +111,33 @@ impl Table {
 
     pub fn translate_with_level(&self, va: usize) -> Option<(usize, Level)> {
         self.translate_at(va, Level::Level1)
+    }
+
+    pub fn apply(
+        &mut self,
+        heap: &mut Heap,
+        arena: Region,
+        plan: &[Mapping],
+        fill: Descriptor,
+    ) -> Result<(), PlanError> {
+        for mapping in plan {
+            if let Some(template) = mapping.template {
+                self.identity_map(heap, mapping.region, template)
+                    .map_err(|e| PlanError {
+                        name: mapping.name,
+                        error: e,
+                    })?
+            }
+        }
+        for gap in gaps(arena, plan.iter().map(|m| m.region)) {
+            self.identity_map(heap, gap.region(), fill)
+                .map_err(|e| PlanError {
+                    name: "unclaimed memory",
+                    error: e,
+                })?
+        }
+
+        Ok(())
     }
 
     fn set(&mut self, slot: usize, value: Descriptor) {

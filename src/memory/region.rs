@@ -1,6 +1,6 @@
 use core::fmt::Display;
 
-use crate::memory::pfn::Pfn;
+use crate::memory::pfn::{PAGE_SIZE, Pfn};
 
 /// One `(address, size)` pair. A range of physical memory, whoever it came from.
 #[derive(Clone, Copy, Debug)]
@@ -50,5 +50,12 @@ impl PageRange {
 
     pub fn contains(&self, pfn: Pfn) -> bool {
         self.start <= pfn && pfn < self.end
+    }
+
+    pub fn region(&self) -> Region {
+        Region {
+            base: self.start.to_addr(),
+            size: self.pages() * PAGE_SIZE,
+        }
     }
 }

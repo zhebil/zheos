@@ -187,10 +187,35 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
             halt();
         }
 
-        if let Err(error) = table.identity_map(h, board.memory, Descriptor::NORMAL_BLOCK) {
+        println!(
+            "after the segments: {:?}",
+            table.translate_with_level(image().base)
+        );
+
+        let memory_before_image = Region {
+            base: board.memory.base,
+            size: image().base - board.memory.base,
+        };
+
+        let memory_after_image = Region {
+            base: image().end(),
+            size: board.memory.end() - image().end(),
+        };
+
+        if let Err(error) = table.identity_map(h, memory_before_image, Descriptor::NORMAL_BLOCK) {
             println!("Failed to map memory: {error}");
             halt();
         }
+
+        if let Err(error) = table.identity_map(h, memory_after_image, Descriptor::NORMAL_BLOCK) {
+            println!("Failed to map memory: {error}");
+            halt();
+        }
+
+        println!(
+            "after board.memory: {:?}",
+            table.translate_with_level(image().base)
+        );
 
         if let Err(error) = table.identity_map(h, devices, Descriptor::DEVICE_BLOCK) {
             println!("Failed to map devices: {error}");

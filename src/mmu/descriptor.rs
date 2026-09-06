@@ -137,7 +137,7 @@ impl Descriptor {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// Bits `00` and `10`. Not an error - it is how a slot says nothing is mapped.
     Invalid,

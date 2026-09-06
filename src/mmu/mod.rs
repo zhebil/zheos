@@ -26,6 +26,7 @@ pub enum MapError {
     OutOfMemory,
     Unaligned(usize),
     BlockInTheWay(usize, Level),
+    TableInTheWay(usize, Level),
 }
 
 impl Display for MapError {
@@ -37,6 +38,13 @@ impl Display for MapError {
                 write!(
                     f,
                     "{va:#012x} is already inside a level {} block",
+                    *level as u8
+                )
+            }
+            Self::TableInTheWay(va, level) => {
+                write!(
+                    f,
+                    "{va:#012x} is already inside a level {} table",
                     *level as u8
                 )
             }
@@ -80,6 +88,10 @@ impl Table {
     /// Walk the table the way the hardware would and report where `va` lands, or
     /// `None` if nothing is mapped there.
     pub fn translate(&self, va: usize) -> Option<usize> {
+        self.translate_at(va, Level::Level1).map(|(addr, _)| addr)
+    }
+
+    pub fn translate_with_level(&self, va: usize) -> Option<(usize, Level)> {
         self.translate_at(va, Level::Level1)
     }
 
@@ -149,6 +161,12 @@ impl Table {
             let chunk_end = slot_end.min(region.end());
 
             if level.is_aligned(addr) && chunk_end == slot_end {
+                let desc = self.get(level.slot_of(addr));
+
+                if level.next().is_some() && desc.kind == Kind::Table {
+                    return Err(MapError::TableInTheWay(addr, level));
+                }
+
                 // Chunk fills the slot exactly, so one leaf covers it.
                 self.set(
                     level.slot_of(addr),
@@ -181,18 +199,18 @@ impl Table {
         Ok(())
     }
 
-    fn translate_at(&self, va: usize, level: Level) -> Option<usize> {
+    fn translate_at(&self, va: usize, level: Level) -> Option<(usize, Level)> {
         let descriptor = self.get(level.slot_of(va));
 
         let offset = va & level.offset_mask();
 
         match descriptor.kind {
             Kind::Invalid => None,
-            Kind::Block => Some(descriptor.address | offset),
+            Kind::Block => Some((descriptor.address | offset, level)),
             Kind::Table => match level.next() {
                 // At level 3 the same two bits mean a page, so this is a leaf and
                 // the walk stops here rather than following the address down.
-                None => Some(descriptor.address | offset),
+                None => Some((descriptor.address | offset, level)),
                 Some(next) => Table::from_base(descriptor.address)?.translate_at(va, next),
             },
         }

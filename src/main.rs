@@ -10,7 +10,10 @@ use crate::{
     board::{Board, Conduit},
     frames::MAX_ORDER,
     heap::HEAP,
-    memory::{image, map::MemoryMap, region::Region},
+    memory::{
+        bss, data, executable, image, map::MemoryMap, region::Region, rodata, stack, text, vectors,
+        writable,
+    },
     mmu::{Table, descriptor::Descriptor},
     uart::uart,
 };
@@ -96,6 +99,14 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     irq::unmask();
 
     println!("image: {}", image());
+    println!("  exec:     {}", executable());
+    println!("    text:    {}", text());
+    println!("    vectors: {}", vectors());
+    println!("  rodata:   {}", rodata());
+    println!("  writable: {}", writable());
+    println!("    data:   {}", data());
+    println!("    bss:    {}", bss());
+    println!("    stack:  {}", stack());
     println!("dtb: {}", dtb.region());
     println!("memory: {}", board.memory);
 

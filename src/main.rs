@@ -8,6 +8,7 @@ use core::{arch::asm, num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
+    context::Task,
     frames::MAX_ORDER,
     heap::HEAP,
     memory::{
@@ -44,6 +45,7 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 
 mod board;
 mod console;
+mod context;
 mod cpu;
 mod dtb;
 mod exception;
@@ -249,6 +251,21 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("0x4800_0000 -> {:?}", table.translate(0x4800_0000));
     println!("0x9000_0000 -> {:?}", table.translate(0x9000_0000));
     println!("sp          -> {:?}", table.translate(cpu::stack_pointer()));
+
+    let Some(task) = Task::new(1) else {
+        println!("Failed to create task 1");
+        halt();
+    };
+    println!(
+        "Task {}: Base: {:x}, Size: {:x}, Top: {:x}, sp: {:x}",
+        task.id(),
+        task.stack().base(),
+        task.stack().size(),
+        task.stack().top(),
+        task.context().sp()
+    );
+
+    println!("top - 16: {:?}", table.translate(task.stack().top() - 16));
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");

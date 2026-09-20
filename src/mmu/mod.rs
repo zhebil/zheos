@@ -2,16 +2,18 @@ use core::{alloc::Layout, fmt::Display, ptr::NonNull};
 
 use crate::{
     heap::Heap,
-    memory::{pfn::PAGE_SIZE, region::Region},
+    memory::{gaps::gaps, pfn::PAGE_SIZE, region::Region},
     mmu::{
         descriptor::{Descriptor, Kind},
         level::Level,
+        policy::Mapping,
     },
 };
 
 pub mod descriptor;
 mod init;
 pub mod level;
+pub mod policy;
 
 const SLOTS: usize = 512;
 const SLOT_MASK: usize = SLOTS - 1;
@@ -22,10 +24,25 @@ const SLOT_MASK: usize = SLOTS - 1;
 /// two sizes agree.
 const _: () = assert!(SLOTS * size_of::<u64>() == PAGE_SIZE);
 
+pub enum PlanError {
+    Failed { name: &'static str, error: MapError },
+    Overlap(&'static str, &'static str),
+}
+
+impl Display for PlanError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Failed { name, error } => write!(f, "failed to map {name}: {error}"),
+            Self::Overlap(one, other) => write!(f, "{one} and {other} claim the same memory"),
+        }
+    }
+}
+
 pub enum MapError {
     OutOfMemory,
     Unaligned(usize),
     BlockInTheWay(usize, Level),
+    TableInTheWay(usize, Level),
 }
 
 impl Display for MapError {
@@ -37,6 +54,13 @@ impl Display for MapError {
                 write!(
                     f,
                     "{va:#012x} is already inside a level {} block",
+                    *level as u8
+                )
+            }
+            Self::TableInTheWay(va, level) => {
+                write!(
+                    f,
+                    "{va:#012x} is already inside a level {} table",
                     *level as u8
                 )
             }
@@ -68,7 +92,7 @@ impl Table {
 
     /// Map `region` so that every virtual address in it equals its own physical
     /// address, with `template` supplying everything but the address and the kind.
-    pub fn identity_map(
+    fn identity_map(
         &mut self,
         heap: &mut Heap,
         region: Region,
@@ -80,7 +104,47 @@ impl Table {
     /// Walk the table the way the hardware would and report where `va` lands, or
     /// `None` if nothing is mapped there.
     pub fn translate(&self, va: usize) -> Option<usize> {
+        self.translate_at(va, Level::Level1).map(|(addr, _)| addr)
+    }
+
+    pub fn translate_with_level(&self, va: usize) -> Option<(usize, Level)> {
         self.translate_at(va, Level::Level1)
+    }
+
+    pub fn apply(
+        &mut self,
+        heap: &mut Heap,
+        arena: Region,
+        plan: &[Mapping],
+        fill: Descriptor,
+    ) -> Result<(), PlanError> {
+        for (i, one) in plan.iter().enumerate() {
+            for other in &plan[i + 1..] {
+                if one.region.base < other.region.end() && other.region.base < one.region.end() {
+                    return Err(PlanError::Overlap(one.name, other.name));
+                }
+            }
+        }
+
+        for mapping in plan {
+            if let Some(template) = mapping.template {
+                self.identity_map(heap, mapping.region, template)
+                    .map_err(|error| PlanError::Failed {
+                        name: mapping.name,
+                        error,
+                    })?
+            }
+        }
+
+        for gap in gaps(arena, plan.iter().map(|m| m.region)) {
+            self.identity_map(heap, gap.region(), fill)
+                .map_err(|error| PlanError::Failed {
+                    name: "unclaimed memory",
+                    error,
+                })?
+        }
+
+        Ok(())
     }
 
     fn set(&mut self, slot: usize, value: Descriptor) {
@@ -149,6 +213,12 @@ impl Table {
             let chunk_end = slot_end.min(region.end());
 
             if level.is_aligned(addr) && chunk_end == slot_end {
+                let desc = self.get(level.slot_of(addr));
+
+                if level.next().is_some() && desc.kind == Kind::Table {
+                    return Err(MapError::TableInTheWay(addr, level));
+                }
+
                 // Chunk fills the slot exactly, so one leaf covers it.
                 self.set(
                     level.slot_of(addr),
@@ -181,18 +251,18 @@ impl Table {
         Ok(())
     }
 
-    fn translate_at(&self, va: usize, level: Level) -> Option<usize> {
+    fn translate_at(&self, va: usize, level: Level) -> Option<(usize, Level)> {
         let descriptor = self.get(level.slot_of(va));
 
         let offset = va & level.offset_mask();
 
         match descriptor.kind {
             Kind::Invalid => None,
-            Kind::Block => Some(descriptor.address | offset),
+            Kind::Block => Some((descriptor.address | offset, level)),
             Kind::Table => match level.next() {
                 // At level 3 the same two bits mean a page, so this is a leaf and
                 // the walk stops here rather than following the address down.
-                None => Some(descriptor.address | offset),
+                None => Some((descriptor.address | offset, level)),
                 Some(next) => Table::from_base(descriptor.address)?.translate_at(va, next),
             },
         }

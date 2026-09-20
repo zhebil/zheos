@@ -31,7 +31,9 @@ pub struct Descriptor {
     /// low 30 bits zero, a level 2 block its low 21, a level 3 page its low 12.
     pub address: usize,
     pub contig: bool,
+    /// Throw when try to execute from kernel
     pub pxn: bool,
+    /// Throw when try to execute from userspace
     pub uxn: bool,
 }
 
@@ -61,6 +63,48 @@ impl Descriptor {
         address: 0x4000_0000,
         contig: false,
         pxn: false,
+        uxn: true,
+    };
+
+    pub const EXECUTABLE: Descriptor = Descriptor {
+        kind: Kind::Block,
+        attr_idx: AttrIndex::Normal,
+        ns: false,
+        ap: AccessPermissions::KernelReadOnly,
+        sh: SH::InnerShareable,
+        af: true,
+        ng: false,
+        address: 0x4000_0000,
+        contig: false,
+        pxn: false,
+        uxn: true,
+    };
+
+    pub const READ_ONLY: Descriptor = Descriptor {
+        kind: Kind::Block,
+        attr_idx: AttrIndex::Normal,
+        ns: false,
+        ap: AccessPermissions::KernelReadOnly,
+        sh: SH::InnerShareable,
+        af: true,
+        ng: false,
+        address: 0x4000_0000,
+        contig: false,
+        pxn: true,
+        uxn: true,
+    };
+
+    pub const WRITABLE: Descriptor = Descriptor {
+        kind: Kind::Block,
+        attr_idx: AttrIndex::Normal,
+        ns: false,
+        ap: AccessPermissions::KernelReadWrite,
+        sh: SH::InnerShareable,
+        af: true,
+        ng: false,
+        address: 0x4000_0000,
+        contig: false,
+        pxn: true,
         uxn: true,
     };
 
@@ -95,7 +139,7 @@ impl Descriptor {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// Bits `00` and `10`. Not an error - it is how a slot says nothing is mapped.
     Invalid,

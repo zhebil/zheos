@@ -1,6 +1,8 @@
-use core::alloc::Layout;
+use core::{alloc::Layout, arch::global_asm};
 
 use crate::{heap::HEAP, memory::pfn::PAGE_SIZE};
+
+global_asm!(include_str!("switch.s"));
 
 pub struct ContextStack {
     base: usize,

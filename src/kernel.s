@@ -6,9 +6,19 @@
 
 // x0 holds the device tree pointer at entry, per the AArch64 boot protocol.
 _start:
+                // Save device tree pointer to temporary register
                 mov     x19, x0
+
+                // Write CPACR_EL1 to enable floating point
+                mov     x1, #0x30 << 16 // 0b11 - floating point enabled bits
+                msr     CPACR_EL1,  x1
+                isb
+
+                // Setup stack pointer
                 ldr     x0,  =__stack_top
                 mov     sp,  x0
+
+                // Zero BSS
                 ldr     x0,  =__bss_start
                 ldr     x1,  =__bss_end
 zero_bss_loop:

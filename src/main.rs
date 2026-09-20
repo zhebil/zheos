@@ -4,7 +4,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::{num::NonZeroU32, time::Duration};
+use core::{arch::asm, num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
@@ -223,6 +223,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("tcr_el1: {:b}", cpu::mmu::read_tcr_el1());
     println!("ttbr0_el1: {:b}", cpu::mmu::read_ttbr0_el1());
     println!("sctlr_el1: {:b}", cpu::mmu::read_sctlr_el1());
+    println!("cpacr_el1 is here: {:b}", cpu::mmu::read_cpacr_el1());
 
     mmu::enable(&mut table);
 
@@ -253,8 +254,11 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("Type 'exit' to shutdown the system");
     println!("----------------------------------");
 
-    timer::sleep(Duration::from_secs(1));
+    unsafe { asm!("fmov d0, xzr") };
+
     zhemon::Zhemon::new().start();
+
+    timer::sleep(Duration::from_secs(1));
 
     shutdown(board.psci)
 }

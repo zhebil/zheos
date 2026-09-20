@@ -8,7 +8,10 @@ MEM ?= 128M
 QFLAGS := -M virt -cpu cortex-a72 -m $(MEM) -nographic -kernel kernel.bin
 MON    := -M virt -cpu cortex-a72 -m $(MEM) -display none -serial null -monitor stdio -kernel kernel.bin
 
-CARGO_OUT := target/aarch64-unknown-none-softfloat/release/zheos
+# .cargo/config.toml is the one place the target is named; read it back rather
+# than repeating it, or a target change silently keeps booting the old binary.
+TARGET    := $(shell sed -n 's/^target *= *"\(.*\)"/\1/p' .cargo/config.toml)
+CARGO_OUT := target/$(TARGET)/release/zheos
 
 # cargo does its own change detection, so this always runs and is cheap.
 # kernel.elf is a copy so the debugger and QEMU have one stable path.
@@ -59,11 +62,17 @@ test-bss: kernel.bin
 
 # Feed scripted keystrokes to the guest's serial input, capture output.
 #   make feed INPUT='1234'
+# The trailing newline is the Enter key: without it zhemon never sees a
+# complete line, never runs the command, and QEMU waits forever.
 INPUT ?= abc123
+FEED_TIMEOUT ?= 15
 feed: kernel.bin
-	@{ sleep 1; printf '$(INPUT)'; sleep 2; } | \
+	@( sleep $(FEED_TIMEOUT); pkill -f "qemu-system-aarch64.*kernel.bin" ) >/dev/null 2>&1 & \
+	GUARD=$$!; \
+	{ sleep 1; printf '$(INPUT)\n'; sleep 2; } | \
 	  $(QEMU) -M virt -cpu cortex-a72 -m $(MEM) -display none -serial stdio -monitor none \
-	  -kernel kernel.bin
+	  -kernel kernel.bin; \
+	kill $$GUARD 2>/dev/null; true
 
 dis: kernel.elf
 	$(BIN)/llvm-objdump -d $<

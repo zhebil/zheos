@@ -8,7 +8,7 @@ use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
-    context::{Context, Task, switch},
+    context::{Task, switch_between},
     frames::MAX_ORDER,
     heap::HEAP,
     lock::SpinLock,
@@ -253,18 +253,21 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("0x9000_0000 -> {:?}", table.translate(0x9000_0000));
     println!("sp          -> {:?}", table.translate(cpu::stack_pointer()));
 
-    let Some(task) = Task::new(1, pong) else {
+    let Some(ping_task) = Task::new(1, ping) else {
         println!("Failed to create task 1");
         halt();
     };
 
-    *PONG.lock() = Some(task);
+    let Some(pong_task) = Task::new(2, pong) else {
+        println!("Failed to create task 2");
+        halt();
+    };
 
-    let mut boot = BOOT.lock();
-    let from: *mut Context = &mut *boot;
-    drop(boot);
-    let to: *const Context = PONG.lock().as_ref().map(|t| t.context()).unwrap();
-    unsafe { switch(from, to) };
+    *BOOT.lock() = Some(Task::boot(0));
+    *PING.lock() = Some(ping_task);
+    *PONG.lock() = Some(pong_task);
+
+    switch_between(&BOOT, &PING);
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");
@@ -294,16 +297,38 @@ fn shutdown(conduit: Conduit) -> ! {
     halt()
 }
 
-static BOOT: SpinLock<Context> = SpinLock::new(Context::new(0));
+static BOOT: SpinLock<Option<Task>> = SpinLock::new(None);
+static PING: SpinLock<Option<Task>> = SpinLock::new(None);
 static PONG: SpinLock<Option<Task>> = SpinLock::new(None);
 
-fn pong() -> ! {
+fn ping() -> ! {
+    let mut n = 0;
+    let mut x = 1.0f64;
     loop {
-        println!("pong");
-        let from: *mut Context = PONG.lock().as_mut().unwrap().context_mut();
-        let boot = BOOT.lock();
-        let to: *const Context = &*boot;
-        drop(boot);
-        unsafe { switch(from, to) };
+        println!("ping {} {}", n, x);
+
+        switch_between(&PING, &PONG);
+
+        n += 1;
+        x *= 2.0;
+
+        if n == 10 {
+            break;
+        }
+    }
+
+    switch_between(&PING, &BOOT);
+    unreachable!("nothing switches back into ping")
+}
+
+fn pong() -> ! {
+    let mut n = 0;
+    let mut x = 1.0f64;
+    loop {
+        println!("pong {} {}", n, x);
+        switch_between(&PONG, &PING);
+
+        n += 1;
+        x *= 2.0;
     }
 }

@@ -1,172 +1,252 @@
-# SCHED - deciding who runs next
+# SCHED - the timer takes the CPU away
 
-## 1. What this is
+## 1. What this is and why
 
-SWITCH can move from one task to another. SCHED is what decides which one, and when, and does it
-without the task's cooperation.
+In SWITCH, tasks handed the CPU to each other by calling `switch` themselves. SCHED takes that
+choice away from them: the **timer interrupt** calls `switch`, a hundred times a second, whether the
+running task wants it or not. Taking the CPU from a task that did not offer it is called
+**preemption**.
 
-The category is **policy**, and it is the first skill in the project that is mostly a decision
-rather than a mechanism. Everything it needs mechanically exists by now: a timer that interrupts,
-an exception path that saves state, a context switch, an allocator that can hand out stacks and
-take them back.
+The category is **software**. The hardware gives you two things you already have - a timer that
+interrupts every 10 ms, and an interrupt path that saves registers - and everything else is a
+choice: which task runs next, where the tasks are kept, and where in the interrupt path the switch
+happens.
 
-The word for taking the processor away from a task that did not ask to give it up is
-**preemption**, and it is the entire difference between this skill and a `yield` function.
+What you build: two tasks that each print a letter in a busy loop and never call anything but
+`print!`, plus zhemon, all sharing one core. Why it matters: until now one runaway loop owned the
+machine. After this, nothing does.
 
-## 2. Preemption is the whole idea
+`docs/diagrams/sched.tldx.jsx` is the whole idea in one picture: the timeline of turns, what
+happens at each tick, and the round-robin order.
 
-A cooperative scheduler needs every task to call `yield` often enough. One task that does not -
-one infinite loop, one long computation - and the machine stops responding. Every task is trusted,
-and the trust is not enforceable.
+## 2. What you already have, and what changes
 
-A preemptive scheduler takes the processor back on a timer interrupt. The task does not know it
-happened. That is the property that makes a kernel a kernel rather than an event loop, and it is
-why the timer interrupt is the load-bearing piece.
+| already works | from |
+| --- | --- |
+| timer interrupt every 10 ms, handler in `src/timer.rs` | TIMER |
+| `vectors.s` saves 784 bytes on the current stack, calls `irq::handle_interrupt`, restores, `eret` | exceptions, SWITCH |
+| `switch`, `Task::new`, `Task::boot`, `ContextStack` | SWITCH |
+| `SpinLock`, which masks interrupts while held | LOCK |
 
-Your `src/timer.rs` already fires at 100 hertz and `irq::handle_interrupt` already dispatches it.
-The change is what the handler does at the end.
+Four things change, and each is one section below:
 
-## 3. The part where it stops being SWITCH
+1. The exception frame grows by 16 bytes. **Section 5.**
+2. The switch happens at the end of `irq::handle_interrupt`, after the GIC is told the interrupt is
+   finished. **Section 6.**
+3. A new task starts through a small assembly trampoline instead of jumping straight into its
+   function. **Section 7.**
+4. Tasks live in one table with a "current" index. **Section 8.**
 
-There is a real subtlety here, and it is the reason this skill is separate from the last one.
+No new hardware and no new system registers. `ELR_EL1` and `SPSR_EL1` are read and written with
+`mrs`/`msr`, the same way `vectors.s` already reads `esr_el1`.
 
-SWITCH saves 12 callee-saved registers, because it is a function call and the calling convention
-already dealt with the rest. A **timer interrupt** is not a function call. The interrupted code
-agreed to nothing, so every register has to be preserved, and your exception entry path already
-does that - it saves the full register set on the way in and restores it on the way out.
+## 3. Reading the names
 
-So a preemptive switch is two saves stacked on top of each other: the exception entry saves
-everything for the interrupted task, and then, from inside the handler, SWITCH saves the
-callee-saved set for the handler's own frame. When the task is resumed, the exception return
-restores the full set.
+- **IRQ** - **I**nterrupt **R**e**Q**uest. The timer and the UART both arrive as one.
+- **GIC** - **G**eneric **I**nterrupt **C**ontroller. It decides which interrupt reaches the CPU.
+- **EOI** - **E**nd **O**f **I**nterrupt: the write that tells the GIC you are done with one.
+  `interrupt.end()` does it, by writing the **EOIR** (EOI **R**egister).
+- **EL1** - **E**xception **L**evel **1**, where the kernel runs. **`FPSR`/`FPCR`** - **F**loating
+  **P**oint **S**tatus / **C**ontrol **R**egister, already in the frame since SWITCH.
+- **`ELR_EL1`** - **E**xception **L**ink **R**egister, EL1: the address to go back to after the
+  interrupt. The hardware writes it on the way in; `eret` reads it on the way out.
+- **`SPSR_EL1`** - **S**aved **P**rogram **S**tatus **R**egister, EL1: a copy of the CPU's state
+  flags at the moment of the interrupt, including whether interrupts were masked.
+- **`PSTATE`** - **P**rocessor **STATE**, the live version of what `SPSR_EL1` saves a copy of.
+- **`DAIF`** - the four mask bits in `PSTATE`: **D**ebug, **A** (SError, "asynchronous abort"),
+  **I**RQ, **F**IQ (**F**ast **I**nterrupt re**Q**uest). A set bit means masked.
+- **`eret`** - **E**xception **RET**urn: jump to `ELR_EL1` and copy `SPSR_EL1` back into `PSTATE`,
+  in one instruction.
+- **Hz** - hertz, times per second. `TIMER_HZ = 100` is one tick every 10 ms.
 
-That layering works, and it is what makes it possible to reuse SWITCH unchanged. The thing to
-verify rather than assume is that the exception return happens on the **new** task's stack with the
-new task's saved frame, which is exactly what the stack pointer swap arranges.
+## 4. The idea: a switch called from inside the interrupt
 
-The alternative design - switching by rewriting the saved exception frame rather than by calling
-SWITCH - is what some kernels do. It is fewer instructions and much harder to reason about. Not
-worth it here.
+Task A is running. The timer fires. `vectors.s` pushes all of A's registers onto A's stack and calls
+the handler. The handler calls `switch(A, B)` - the same `switch` from SWITCH, unchanged. It pushes
+a 160-byte switch frame on top, saves `sp` into A's `Context`, and loads B's.
 
-## 4. Round robin, and why it is enough
+So a preempted task is paused twice over, on its own stack:
 
-Every runnable task gets a turn, in order, for one tick. When the tick fires, the running task goes
-to the back of the queue and the front of the queue runs.
+- underneath, the **exception frame**: where A was when the timer hit, and every register it had;
+- on top, the **switch frame**: where the handler was when it switched away.
 
-That is it, and it is enough for a long time. Worth knowing what it does not do, so that you know
-what you are choosing:
+Resuming A later undoes both, in reverse. `switch` pops the switch frame and returns into A's
+handler. The handler returns into `vectors.s`. `vectors.s` pops the exception frame and `eret`s to
+the exact instruction A was on. A never finds out.
 
-- **No priorities.** A task that matters more does not get more.
-- **No fairness over time.** A task that blocks on input and wakes up gets one tick like everyone
-  else, even though it used almost nothing.
-- **No accounting.** Nobody knows how much processor each task has had.
+`docs/diagrams/sched-stacks.tldx.jsx` draws this with both stacks side by side, in step order.
 
-Linux's Completely Fair Scheduler tracks accumulated runtime per task and always runs the one with
-the least, which fixes all three at the cost of a red-black tree and a lot of tuning. That is a
-later skill if it is ever a skill at all. Round robin first, and it is what most real-time
-schedulers still are.
+That is the whole mechanism. What follows are the three places where it breaks if you do only that.
 
-## 5. Task states
+## 5. The exception frame has to carry `ELR_EL1` and `SPSR_EL1`
 
-Three, and the third is what makes the scheduler more than a rotation:
+Today `save_all_registers` saves `x0`-`x30`, `FPSR`, `FPCR` and `q0`-`q31`. It does not save
+`ELR_EL1` or `SPSR_EL1`, and until now it did not need to: nothing ran between entry and `eret`
+that could change them.
 
-- **Running.** On a processor right now. With four cores, up to four tasks are.
-- **Ready.** Could run, waiting for a turn. These are the queue.
-- **Blocked.** Waiting for something that has not happened, and must not be given a turn. Waiting
-  for a keystroke is the case you already have, in `src/input.rs`.
+Now something does. `ELR_EL1` is one register per CPU, not per task. Follow it:
 
-`getc` today spins in `wfi` inside `without_interrupts` until a byte arrives. Once tasks exist,
-that is a task that should be **blocked**, not one that should be spinning, and converting it is
-the first genuinely useful thing the scheduler does. That conversion is what turns "several things
-take turns" into "several things wait on different events", which is the point of the exercise.
+1. A is interrupted. `ELR_EL1` = A's address. Switch to B.
+2. B runs and is interrupted. `ELR_EL1` = B's address. Switch to A.
+3. A's handler finishes and `eret`s - to `ELR_EL1`, which is **B's** address.
 
-## 6. It has to be multi-core from the start
+A's registers, on A's stack, now running B's code. It does not crash. Observed on this kernel: the
+letters still alternate, but zhemon never reacts to `exit`, because the tasks are quietly running
+each other's code. That makes it the worst kind of bug to find later.
 
-MANY CORES comes before this skill deliberately, and the reason is that a single-core scheduler and
-a multi-core scheduler are not the same design with a loop around it.
+The fix: read both with `mrs` on entry, store them in the frame, and write them back with `msr`
+just before the `eret`. Linux's exception frame, `struct pt_regs`, holds the same two as `pc` and
+`pstate`.
 
-Three questions that have no single-core answer:
+## 6. Switch after the EOI, never before
 
-- **One queue or one per core?** One shared queue is simple and every scheduling decision contends
-  on one lock. Per-core queues scale and need work stealing so an idle core does not sit next to a
-  busy one.
-- **Can a task move between cores?** If yes, everything per-task must be genuinely per-task and not
-  accidentally per-core. If no, a core's queue can starve while another is idle.
-- **Who runs the idle task?** Each core needs something to run when its queue is empty, and it must
-  be a real task with a real stack, because it will be interrupted and switched away from like any
-  other.
+The GIC keeps track of the interrupt being handled. Until you write the EOI, it will not deliver
+another interrupt of the same priority, and the timer's next tick is exactly that.
 
-Discovering these after writing a single-core version is a rewrite, which is the specific cost this
-ordering avoids. Start with one shared queue behind the lock from LOCK, know that it is the
-contended design, and leave a note saying what would replace it.
+So if the handler switches away *before* `interrupt.end()`, the EOI is stuck inside a paused task.
+The new task runs with no timer interrupts at all, and it keeps the CPU forever. Observed: task A
+prints all 40 of its letters, then the machine goes silent.
 
-## 7. The reentrancy problem this skill creates
+The fix is to split the job. The timer handler only **marks** that a switch is due - one
+`AtomicBool`, set after it rearms the timer. `irq::handle_interrupt` calls `interrupt.end()` as it
+does now, and only *then* checks the flag and switches. Linux does the same, with a flag called
+`TIF_NEED_RESCHED` checked on the way out of every interrupt.
 
-The scheduler runs inside an interrupt handler and it allocates - stacks, task records, queue nodes.
-The allocator masks interrupts and takes a lock. That is fine and was designed for.
+## 7. A brand new task starts with interrupts masked
 
-What is not automatically fine: **a switch that happens while a lock is held.** If a task takes the
-allocator's lock, and the timer preempts it, and the scheduler runs another task that wants the
-allocator, that task spins on a lock held by a task that is not currently running. On one core that
-is permanent. On four it resolves only if the holder happens to be running elsewhere.
+Taking an IRQ sets the `I` bit in `PSTATE`, so the whole handler - including the `switch` - runs
+with interrupts masked. `DAIF` belongs to the CPU, not to a task, so whoever `switch` lands in
+inherits it.
 
-Two standard answers, and this is the design decision of the skill:
+- A task that was **preempted before** is fine: it goes back out through `vectors.s`, and `eret`
+  restores its own `SPSR_EL1`, in which `I` was clear.
+- A task that **never ran** has no exception frame. With the SWITCH forged frame, its `ret` jumps
+  straight into its function with interrupts still masked. Nothing can preempt it. Observed: exactly
+  the same silence as section 6 - A prints 40 letters, then nothing.
 
-- **Do not preempt while a lock is held.** A per-core counter, incremented when any lock is taken
-  and decremented when released; the timer handler declines to switch when it is non-zero. This is
-  Linux's `preempt_count`, and it is why that counter exists.
-- **Make the locks not disable preemption but be sleepable.** A much larger change, and the wrong
-  one for a kernel this size.
+The fix is a trampoline: a few instructions in `switch.s` that every new task passes through once.
 
-Take the first. It means the guard from LOCK grows a second responsibility, which is a change to a
-finished skill and should be made deliberately rather than discovered.
+1. `msr daifclr, #2` - unmask IRQs.
+2. `blr x19` - call the task's function.
 
-## 8. What you are building
+The forged frame changes to match: **`x30` = the trampoline, `x19` = the task's function.** `x19` is
+a callee-saved register, so `switch` restores it from the frame like any other, and it is sitting
+there when the trampoline runs. Linux does exactly this: on arm64 a new thread's `x19` holds its
+function and its `pc` is `ret_from_fork`; on x86 `kthread_frame_init` puts the function in `bx`.
 
-- `Task`, extending SWITCH's with a state, an identifier, and its stack region so it can be freed.
-- A run queue behind the lock. A `VecDeque` from `alloc` is the honest first answer now that the
-  heap works, and using it here is the payoff for the three allocator skills.
-- An idle task per core.
-- `schedule()` - pick the next task, mark states, call `switch`. Callable both from the timer
-  handler, for preemption, and directly, for blocking.
-- `block()` and `wake(task)`, and the conversion of `input::getc` to use them.
-- A preemption counter, per section 7, wired into the lock guard.
-- Task exit: a task's entry point returning has to free its stack and never come back, which is the
-  fake `x30` slot from SWITCH section 5 finally getting a real value.
+Since task functions are `fn() -> !`, the trampoline never gets control back. Park it after the
+`blr` anyway, so a mistake shows up as a stopped task rather than a jump into whatever follows.
 
-## 9. When nothing happens
+## 8. The task table
+
+The simplest scheduler that works:
+
+- a fixed-size array of `Option<Task>`, say 4 slots;
+- the index of the task running now;
+- both inside one `SpinLock`.
+
+Slot 0 is `Task::boot` - the code that is already running, which becomes zhemon. The others come
+from `Task::new`. **Round robin**: at every due switch, walk forward from the current index to the
+next slot that holds a task, wrapping around. If that is the current slot, there is nobody else,
+so return.
+
+Why an array and not a queue: tasks sit still in it, and picking the next one needs no allocation
+inside an interrupt handler. A queue that moves tasks around is what you add when tasks can block or
+exit, and neither exists yet - that is the next skill, WAIT.
+
+Two lock rules, both inherited:
+
+- **Drop the guard before `switch`.** The same trap as in SWITCH: a guard borrowed straight through
+  in a `let` lives to the end of the block, across the switch.
+- **A task holding any `SpinLock` cannot be preempted.** `lock()` masks interrupts, so the tick waits
+  until the guard drops and is taken then. That is why no "preemption counter" is needed here -
+  Linux's `spin_lock_irqsave` gets the same effect the same way.
+
+There is no idle task, because slot 0 always has something to run: zhemon waits for keys in
+`input::getc`, which unmasks interrupts every time around its loop, so it can be preempted like
+anyone else.
+
+Written for one core. The lock is taken as if other cores existed, and MANY CORES will make "the
+current task" one per core.
+
+## 9. The constants
+
+| value | what | derivation |
+| --- | --- | --- |
+| `800` | exception frame size | 784 + 16 for the `ELR_EL1`/`SPSR_EL1` pair. Still a multiple of 16. |
+| `16 * 16` | `ELR_EL1`, `SPSR_EL1` | the first free pair after `x0`-`x30` (pairs 0-15). |
+| `16 * 17` | `FPSR`, `FPCR` | moved up one pair. |
+| `16 * 18` .. `16 * 48` | `q0`-`q31` | moved up one pair. The last is 768, inside the `q` form's 1008 limit. The `x` pairs must stay at or below 504, the 64-bit `stp` limit, and 16 * 17 = 272 is. |
+| `#2` in `msr daifclr, #2` | unmask IRQ only | the immediate is 4 bits, one per `DAIF` letter: D = 8, A = 4, I = 2, F = 1. `cpu::unmask_irqs` uses `#3`, IRQ and FIQ. |
+| `100` Hz | `TIMER_HZ` | one tick per 10 ms, so one time slice is 10 ms. |
+| `4` | table slots | boot plus two tasks, plus one spare. |
+
+## 10. What you are building
+
+In this order. Each step boots and has something to check.
+
+**Step 1 - save `ELR_EL1` and `SPSR_EL1`** in `save_all_registers` / `restore_all_registers`, with
+the new offsets from section 9. Update the frame-size comment.
+*Check:* nothing changes. Boot, type a key, `make feed INPUT='exit'` shuts down. That is the point -
+the frame grew and nothing noticed.
+
+**Step 2 - the trampoline.** In `switch.s`, a global label that unmasks IRQs and `blr x19`s, then
+parks. In `Task::new`, the forged frame gets `x19` = entry and `x30` = the trampoline.
+*Check:* the SWITCH ping-pong still prints its twenty lines. It is cooperative and runs with
+interrupts on, so the only difference is one extra hop at each task's first start.
+
+**Step 3 - the table**, in a new `sched` module: the locked array and current index, a function that
+puts `Task::boot(0)` in slot 0, and one that places a `Task::new` in the first free slot. Delete the
+ping-pong from `main.rs`, and `switch_between` with it, since nothing else uses it. Put two tasks
+in the table instead: each prints its letter 40 times with
+a busy loop between letters, then spins without printing.
+*Check:* boot is unchanged and **no letters appear**. The tasks exist, but nothing switches to them
+yet.
+
+**Step 4 - preempt.** The timer handler sets the flag after rearming. After `interrupt.end()`,
+`irq::handle_interrupt` calls into `sched`, which clears the flag, picks the next slot, takes both
+`Context` pointers, drops the guard, and calls `switch`.
+*Check:* section 12.
+
+## 11. When something goes wrong
 
 | symptom | almost certainly |
 | --- | --- |
-| the first switch out of `kmain` never comes back | `kmain` is not a task. It needs a task record to be switched *away from*, even if nothing ever switches back to it. |
-| tasks run once each and then the machine hangs | the running task is not being put back on the queue, or is being put back in the wrong state. |
-| a task resumes with the wrong registers | the layering in section 3. The exception frame and the switch frame are on the same stack and one of them is being restored from the wrong place. |
-| everything works until a task allocates | the lock-and-preempt interaction. Section 7. |
-| the machine hangs the moment a second core is scheduling | one queue, no lock, or a lock taken without masking. |
-| a task's stack is freed while it is running | exit ordering. A task cannot free its own stack while standing on it; the next task, or the idle task, has to do it. |
-| ticks stop entirely after the first switch | the timer comparison register was not reprogrammed, because the handler switched away before reaching the line that does it. Reprogram before scheduling, not after. |
-| keystrokes are lost once `getc` blocks | the wake is happening from the interrupt handler into a queue behind a lock that the handler cannot take. The wake path has to be safe from interrupt context, which is a different constraint from the allocation path. |
+| letters alternate, but zhemon ignores `exit` and `make feed` runs to its timeout | `ELR_EL1`/`SPSR_EL1` not in the frame. Section 5. |
+| one task prints all 40 letters, then silence | either the switch is before `interrupt.end()` (section 6), or the trampoline does not unmask (section 7). Same symptom, two causes. |
+| no letters at all, boot looks normal | nothing calls the scheduler: the flag is never set, never checked, or the tasks never made it into the table. |
+| `failed to acquire lock after 16777216 attempts` | the scheduler's guard is alive across `switch`. |
+| exception with `ELR` = `0x0` on a new task's first run | `x30` is not the trampoline, or `x19` is not the entry. |
+| a task crashes after running for a while | stack overflow. Each preemption puts 800 + 160 bytes plus the handler's own frames on the task's 16 KiB stack. |
 
-## 10. How you will know it worked
+## 12. How you will know it worked
 
-Three tasks printing their own names in a loop with no yield anywhere in them, interleaving evenly,
-while the monitor still responds to keystrokes.
+`make feed INPUT='exit'` with two tasks printing `A` and `B` 40 times each, a busy loop of 2,000,000
+iterations between letters:
 
-The details that make it convincing rather than plausible:
+```
+Hello, ZheOS!
+Type 'exit' to shutdown the system
+----------------------------------
+\AAAABBBBAAAABBBBAAAABBBBAAAABBBAAABBBBBAAAABBBBAAABBBBAAAABBBBAAABBBBAAABBBBAAAAexit
+```
 
-- One of the three is a tight loop with no input, output or system call of any kind. It cannot
-  cooperate, so if the other two keep running, the processor is being taken from it.
-- The interleaving is even. Roughly equal counts over a second is round robin working; wildly
-  unequal counts mean something is yielding early or the tick is not firing on every core.
-- A task exits and the others carry on, and `heap::free_bytes()` goes back up by that task's stack.
-  That is the allocator and the scheduler agreeing, and it is the first moment the whole system
-  behaves like one.
+and QEMU exits on its own in about 3 seconds.
+
+- **The letters alternate in runs**, 3 to 5 at a time, mostly 4. Neither task calls anything that
+  could give the CPU away, so every change of letter is the timer taking it. A run is roughly one
+  10 ms slice; how many letters fit in one depends on how fast the host runs QEMU.
+- **Exactly 40 of each.** Nothing was lost or repeated when a task was paused mid-loop and resumed.
+- **zhemon still echoes `exit` and shuts down**, sharing the CPU three ways. That is also the proof
+  that each task returned to its *own* interrupted instruction, since zhemon was preempted like the
+  others.
 
 ---
 
 ## Optional reading
 
-- `kernel/sched/core.c` in Linux, `__schedule`. Long, and the top of it is recognisably section 8.
-- `include/linux/preempt.h` for `preempt_count` and section 7.
-- Operating Systems: Three Easy Pieces, chapters 7 through 10, on scheduling policy. Free online,
-  and the clearest writing on why round robin is where everyone starts.
+- Linux `arch/arm64/kernel/entry.S`: `kernel_entry` saves `elr_el1` and `spsr_el1` into `pt_regs`
+  (section 5), and `ret_from_fork` is the trampoline from section 7.
+- Linux `arch/arm64/kernel/process.c`, `copy_thread` - sets a new thread's `x19` and `pc`.
+- *Operating Systems: Three Easy Pieces*, chapters 6 and 7 - limited direct execution and round
+  robin, free online.

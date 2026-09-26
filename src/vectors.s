@@ -43,9 +43,9 @@
 // `frame`. Full 128-bit q registers, not d: an interrupt promised the
 // interrupted code nothing, so the top halves have to survive too.
 //
-// 256 + 512 + 16 = 784.
+// 256 + 512 + 16 + 16 = 800.
 .macro          save_all_registers
-                sub     sp,  sp,  #784
+                sub     sp,  sp,  #800
                 stp     x0,  x1,  [sp, #16 * 0]
                 stp     x2,  x3,  [sp, #16 * 1]
                 stp     x4,  x5,  [sp, #16 * 2]
@@ -66,49 +66,57 @@
                 // Safe to use x0 and x1 as scratch: they are already saved.
                 // The status pair sits below the vectors because a 64-bit stp
                 // only reaches +504, while a q stp reaches +1008.
-                mrs     x0,  fpsr
-                mrs     x1,  fpcr
+                mrs     x0,  elr_el1
+                mrs     x1,  spsr_el1
+                mrs     x2,  fpsr
+                mrs     x3,  fpcr
                 stp     x0,  x1,  [sp, #16 * 16]
+                stp     x2,  x3,  [sp, #16 * 17]
 
-                stp     q0,  q1,  [sp, #16 * 17]
-                stp     q2,  q3,  [sp, #16 * 19]
-                stp     q4,  q5,  [sp, #16 * 21]
-                stp     q6,  q7,  [sp, #16 * 23]
-                stp     q8,  q9,  [sp, #16 * 25]
-                stp     q10, q11, [sp, #16 * 27]
-                stp     q12, q13, [sp, #16 * 29]
-                stp     q14, q15, [sp, #16 * 31]
-                stp     q16, q17, [sp, #16 * 33]
-                stp     q18, q19, [sp, #16 * 35]
-                stp     q20, q21, [sp, #16 * 37]
-                stp     q22, q23, [sp, #16 * 39]
-                stp     q24, q25, [sp, #16 * 41]
-                stp     q26, q27, [sp, #16 * 43]
-                stp     q28, q29, [sp, #16 * 45]
-                stp     q30, q31, [sp, #16 * 47]
+                stp     q0,  q1,  [sp, #16 * 18]
+                stp     q2,  q3,  [sp, #16 * 20]
+                stp     q4,  q5,  [sp, #16 * 22]
+                stp     q6,  q7,  [sp, #16 * 24]
+                stp     q8,  q9,  [sp, #16 * 26]
+                stp     q10, q11, [sp, #16 * 28]
+                stp     q12, q13, [sp, #16 * 30]
+                stp     q14, q15, [sp, #16 * 32]
+                stp     q16, q17, [sp, #16 * 34]
+                stp     q18, q19, [sp, #16 * 36]
+                stp     q20, q21, [sp, #16 * 38]
+                stp     q22, q23, [sp, #16 * 40]
+                stp     q24, q25, [sp, #16 * 42]
+                stp     q26, q27, [sp, #16 * 44]
+                stp     q28, q29, [sp, #16 * 46]
+                stp     q30, q31, [sp, #16 * 48]
 .endm
 
 .macro  restore_all_registers
-                ldp     q30, q31, [sp, #16 * 47]
-                ldp     q28, q29, [sp, #16 * 45]
-                ldp     q26, q27, [sp, #16 * 43]
-                ldp     q24, q25, [sp, #16 * 41]
-                ldp     q22, q23, [sp, #16 * 39]
-                ldp     q20, q21, [sp, #16 * 37]
-                ldp     q18, q19, [sp, #16 * 35]
-                ldp     q16, q17, [sp, #16 * 33]
-                ldp     q14, q15, [sp, #16 * 31]
-                ldp     q12, q13, [sp, #16 * 29]
-                ldp     q10, q11, [sp, #16 * 27]
-                ldp     q8,  q9,  [sp, #16 * 25]
-                ldp     q6,  q7,  [sp, #16 * 23]
-                ldp     q4,  q5,  [sp, #16 * 21]
-                ldp     q2,  q3,  [sp, #16 * 19]
-                ldp     q0,  q1,  [sp, #16 * 17]
+                ldp     q30, q31, [sp, #16 * 48]
+                ldp     q28, q29, [sp, #16 * 46]
+                ldp     q26, q27, [sp, #16 * 44]
+                ldp     q24, q25, [sp, #16 * 42]
+                ldp     q22, q23, [sp, #16 * 40]
+                ldp     q20, q21, [sp, #16 * 38]
+                ldp     q18, q19, [sp, #16 * 36]
+                ldp     q16, q17, [sp, #16 * 34]
+                ldp     q14, q15, [sp, #16 * 32]
+                ldp     q12, q13, [sp, #16 * 30]
+                ldp     q10, q11, [sp, #16 * 28]
+                ldp     q8,  q9,  [sp, #16 * 26]
+                ldp     q6,  q7,  [sp, #16 * 24]
+                ldp     q4,  q5,  [sp, #16 * 22]
+                ldp     q2,  q3,  [sp, #16 * 20]
+                ldp     q0,  q1,  [sp, #16 * 18]
 
-                ldp     x0,  x1,  [sp, #16 * 16]
+                ldp     x0,  x1,  [sp, #16 * 17]
                 msr     fpsr, x0
                 msr     fpcr, x1
+
+                ldp     x2,  x3,  [sp, #16 * 16]
+                msr     elr_el1, x2
+                msr     spsr_el1, x3
+
 
                 ldr     x30,      [sp, #16 * 15]
                 ldp     x28, x29, [sp, #16 * 14]
@@ -126,7 +134,7 @@
                 ldp     x4,  x5,  [sp, #16 * 2]
                 ldp     x2,  x3,  [sp, #16 * 1]
                 ldp     x0,  x1,  [sp, #16 * 0]
-                add     sp,  sp,  #784
+                add     sp,  sp,  #800
 .endm
 
 

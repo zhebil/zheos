@@ -2,6 +2,7 @@ use core::num::NonZeroU32;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 
+use crate::sched;
 use crate::{
     cpu::{
         self,
@@ -54,6 +55,8 @@ fn handle_interrupt(_intid: u32) {
     }
 
     write_compare(deadline);
+
+    sched::tick();
 
     KERNEL_TICKS.fetch_add(1, Ordering::Relaxed);
 }

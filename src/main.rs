@@ -8,10 +8,9 @@ use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
-    context::{Task, switch_between},
+    context::Task,
     frames::MAX_ORDER,
     heap::HEAP,
-    lock::SpinLock,
     memory::{
         bss, data, executable, image, map::MemoryMap, region::Region, rodata, stack, stack_guard,
         text, vectors, writable_data,
@@ -62,6 +61,7 @@ mod mmu;
 mod print;
 mod psci;
 mod ring_buffer;
+mod sched;
 mod slab;
 mod timer;
 mod uart;
@@ -253,21 +253,18 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("0x9000_0000 -> {:?}", table.translate(0x9000_0000));
     println!("sp          -> {:?}", table.translate(cpu::stack_pointer()));
 
-    let Some(ping_task) = Task::new(1, ping) else {
-        println!("Failed to create task 1");
-        halt();
+    sched::init();
+    let Some(task_a) = Task::new(1, || print_letters('A')) else {
+        println!("Failed to spawn task_a");
+        halt()
+    };
+    let Some(task_b) = Task::new(2, || print_letters('B')) else {
+        println!("Failed to spawn task_b");
+        halt()
     };
 
-    let Some(pong_task) = Task::new(2, pong) else {
-        println!("Failed to create task 2");
-        halt();
-    };
-
-    *BOOT.lock() = Some(Task::boot(0));
-    *PING.lock() = Some(ping_task);
-    *PONG.lock() = Some(pong_task);
-
-    switch_between(&BOOT, &PING);
+    let _ = sched::spawn(task_a);
+    let _ = sched::spawn(task_b);
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");
@@ -297,38 +294,17 @@ fn shutdown(conduit: Conduit) -> ! {
     halt()
 }
 
-static BOOT: SpinLock<Option<Task>> = SpinLock::new(None);
-static PING: SpinLock<Option<Task>> = SpinLock::new(None);
-static PONG: SpinLock<Option<Task>> = SpinLock::new(None);
-
-fn ping() -> ! {
-    let mut n = 0;
-    let mut x = 1.0f64;
-    loop {
-        println!("ping {} {}", n, x);
-
-        switch_between(&PING, &PONG);
-
-        n += 1;
-        x *= 2.0;
-
-        if n == 10 {
-            break;
+pub fn print_letters(c: char) -> ! {
+    for _ in 0..40 {
+        print!("{}", c);
+        let mut i = 0;
+        loop {
+            i += 1;
+            if i > 2_000_000 {
+                break;
+            }
+            core::hint::spin_loop();
         }
     }
-
-    switch_between(&PING, &BOOT);
-    unreachable!("nothing switches back into ping")
-}
-
-fn pong() -> ! {
-    let mut n = 0;
-    let mut x = 1.0f64;
-    loop {
-        println!("pong {} {}", n, x);
-        switch_between(&PONG, &PING);
-
-        n += 1;
-        x *= 2.0;
-    }
+    halt()
 }

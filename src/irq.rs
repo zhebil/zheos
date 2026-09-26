@@ -1,6 +1,7 @@
 use crate::cpu;
 use crate::gic;
 use crate::println;
+use crate::sched;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -75,4 +76,6 @@ pub extern "C" fn handle_interrupt() {
     // Unconditional: an interrupt nobody wanted still has to be deactivated,
     // or the running priority never drops and nothing is ever delivered again.
     interrupt.end();
+
+    sched::preempt();
 }

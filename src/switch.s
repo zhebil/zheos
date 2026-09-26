@@ -56,3 +56,15 @@ switch:
                 // x30 came off the new stack, so this returns into the task we
                 // just entered rather than to the caller above.
                 ret
+
+.global trampoline
+.text
+trampoline:
+                // Unmask interrupts
+                msr     daifclr, #2
+                blr     x19
+                // park
+1:
+                wfi
+                b      1b
+

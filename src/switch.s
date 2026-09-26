@@ -64,6 +64,7 @@ trampoline:
                 msr     daifclr, #2
                 blr     x19
                 // park
-loop:
-                b      loop
+1:
+                wfi
+                b      1b
 

@@ -4,13 +4,14 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::{arch::asm, num::NonZeroU32, time::Duration};
+use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
-    context::Task,
+    context::{Context, Task, switch},
     frames::MAX_ORDER,
     heap::HEAP,
+    lock::SpinLock,
     memory::{
         bss, data, executable, image, map::MemoryMap, region::Region, rodata, stack, stack_guard,
         text, vectors, writable_data,
@@ -252,26 +253,22 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("0x9000_0000 -> {:?}", table.translate(0x9000_0000));
     println!("sp          -> {:?}", table.translate(cpu::stack_pointer()));
 
-    let Some(task) = Task::new(1) else {
+    let Some(task) = Task::new(1, pong) else {
         println!("Failed to create task 1");
         halt();
     };
-    println!(
-        "Task {}: Base: {:x}, Size: {:x}, Top: {:x}, sp: {:x}",
-        task.id(),
-        task.stack().base(),
-        task.stack().size(),
-        task.stack().top(),
-        task.context().sp()
-    );
 
-    println!("top - 16: {:?}", table.translate(task.stack().top() - 16));
+    *PONG.lock() = Some(task);
+
+    let mut boot = BOOT.lock();
+    let from: *mut Context = &mut *boot;
+    drop(boot);
+    let to: *const Context = PONG.lock().as_ref().map(|t| t.context()).unwrap();
+    unsafe { switch(from, to) };
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");
     println!("----------------------------------");
-
-    unsafe { asm!("fmov d0, xzr") };
 
     zhemon::Zhemon::new().start();
 
@@ -295,4 +292,18 @@ fn shutdown(conduit: Conduit) -> ! {
 
     println!("PSCI refused to power the machine off");
     halt()
+}
+
+static BOOT: SpinLock<Context> = SpinLock::new(Context::new(0));
+static PONG: SpinLock<Option<Task>> = SpinLock::new(None);
+
+fn pong() -> ! {
+    loop {
+        println!("pong");
+        let from: *mut Context = PONG.lock().as_mut().unwrap().context_mut();
+        let boot = BOOT.lock();
+        let to: *const Context = &*boot;
+        drop(boot);
+        unsafe { switch(from, to) };
+    }
 }

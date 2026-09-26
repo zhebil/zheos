@@ -6,6 +6,7 @@ global_asm!(include_str!("switch.s"));
 
 unsafe extern "C" {
     pub fn switch(from: *mut Context, to: *const Context);
+    pub fn trampoline() -> !;
 }
 
 pub fn switch_between(from: &SpinLock<Option<Task>>, to: &SpinLock<Option<Task>>) {
@@ -109,7 +110,8 @@ impl Task {
 
         unsafe {
             frame.write(SwitchFrame {
-                x30: entry as usize,
+                x30: trampoline as *const () as usize,
+                x19: entry as usize,
                 ..Default::default()
             });
         }

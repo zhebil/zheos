@@ -28,7 +28,7 @@
 .endm
 
 
-// Push x0 through x30 onto the stack, in the order the registers are numbered.
+// Push x0 through x30, then FPSR and FPCR, then q0 through q31.
 //
 // The hardware saved nothing for us, so this has to happen before any other
 // instruction touches a register. `stp` stores a pair at once, so 31 registers
@@ -37,8 +37,15 @@
 // 31 registers is 248 bytes; we take 256 because the stack pointer has to stay
 // a multiple of 16 or the CPU faults on the next push - inside the handler,
 // which is the worst place to fault.
+//
+// The vector registers go *above* the general purpose ones so that sp still
+// points at the x0 slot, which is what report_exception hands to Rust as
+// `frame`. Full 128-bit q registers, not d: an interrupt promised the
+// interrupted code nothing, so the top halves have to survive too.
+//
+// 256 + 512 + 16 = 784.
 .macro          save_all_registers
-                sub     sp,  sp,  #256
+                sub     sp,  sp,  #784
                 stp     x0,  x1,  [sp, #16 * 0]
                 stp     x2,  x3,  [sp, #16 * 1]
                 stp     x4,  x5,  [sp, #16 * 2]
@@ -55,9 +62,54 @@
                 stp     x26, x27, [sp, #16 * 13]
                 stp     x28, x29, [sp, #16 * 14]
                 str     x30,      [sp, #16 * 15]
+
+                // Safe to use x0 and x1 as scratch: they are already saved.
+                // The status pair sits below the vectors because a 64-bit stp
+                // only reaches +504, while a q stp reaches +1008.
+                mrs     x0,  fpsr
+                mrs     x1,  fpcr
+                stp     x0,  x1,  [sp, #16 * 16]
+
+                stp     q0,  q1,  [sp, #16 * 17]
+                stp     q2,  q3,  [sp, #16 * 19]
+                stp     q4,  q5,  [sp, #16 * 21]
+                stp     q6,  q7,  [sp, #16 * 23]
+                stp     q8,  q9,  [sp, #16 * 25]
+                stp     q10, q11, [sp, #16 * 27]
+                stp     q12, q13, [sp, #16 * 29]
+                stp     q14, q15, [sp, #16 * 31]
+                stp     q16, q17, [sp, #16 * 33]
+                stp     q18, q19, [sp, #16 * 35]
+                stp     q20, q21, [sp, #16 * 37]
+                stp     q22, q23, [sp, #16 * 39]
+                stp     q24, q25, [sp, #16 * 41]
+                stp     q26, q27, [sp, #16 * 43]
+                stp     q28, q29, [sp, #16 * 45]
+                stp     q30, q31, [sp, #16 * 47]
 .endm
 
 .macro  restore_all_registers
+                ldp     q30, q31, [sp, #16 * 47]
+                ldp     q28, q29, [sp, #16 * 45]
+                ldp     q26, q27, [sp, #16 * 43]
+                ldp     q24, q25, [sp, #16 * 41]
+                ldp     q22, q23, [sp, #16 * 39]
+                ldp     q20, q21, [sp, #16 * 37]
+                ldp     q18, q19, [sp, #16 * 35]
+                ldp     q16, q17, [sp, #16 * 33]
+                ldp     q14, q15, [sp, #16 * 31]
+                ldp     q12, q13, [sp, #16 * 29]
+                ldp     q10, q11, [sp, #16 * 27]
+                ldp     q8,  q9,  [sp, #16 * 25]
+                ldp     q6,  q7,  [sp, #16 * 23]
+                ldp     q4,  q5,  [sp, #16 * 21]
+                ldp     q2,  q3,  [sp, #16 * 19]
+                ldp     q0,  q1,  [sp, #16 * 17]
+
+                ldp     x0,  x1,  [sp, #16 * 16]
+                msr     fpsr, x0
+                msr     fpcr, x1
+
                 ldr     x30,      [sp, #16 * 15]
                 ldp     x28, x29, [sp, #16 * 14]
                 ldp     x26, x27, [sp, #16 * 13]
@@ -74,7 +126,7 @@
                 ldp     x4,  x5,  [sp, #16 * 2]
                 ldp     x2,  x3,  [sp, #16 * 1]
                 ldp     x0,  x1,  [sp, #16 * 0]
-                add     sp,  sp,  #256
+                add     sp,  sp,  #784
 .endm
 
 

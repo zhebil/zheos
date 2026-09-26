@@ -37,27 +37,93 @@ A function that uses these must put them back before returning. These are the on
 must save, because from the compiler's point of view the switch is an ordinary function call and it
 expects them preserved.
 
-**Caller-saved.** `x0` through `x18`. Any function is free to destroy these. The compiler already
+**Caller-saved.** `x0` through `x17`. Any function is free to destroy these. The compiler already
 assumed they were gone across the call, so it has already spilled anything it needed. **A context
 switch does not save them**, and that is not a shortcut - it is the calling convention being used
 correctly.
 
+**`x18` is neither.** AAPCS64 reserves it as the platform register and hands it to the operating
+system to define. This kernel does not use it, so it is scratch here and the switch can ignore it -
+but it is the one register whose role is yours to choose rather than to obey.
+
 That is 12 registers, 96 bytes, plus the stack pointer. Compare with what an *interrupt* has to
 save: every register, because an interrupt is not a function call and the interrupted code agreed
-to nothing. Your exception handler already does that work, and the difference between the two is
-worth understanding, because it is the difference between a cooperative switch and a preemptive
-one.
+to nothing. You have already written that half: `save_all_registers` in `src/vectors.s` pushes `x0`
+through `x30`, and takes 256 bytes to hold 248 bytes of register, for the same alignment reason as
+the fake frame in section 5.
 
-Two more that this kernel does not need yet, and will:
+Put the two numbers side by side. 96 bytes because the compiler promised something; 256 bytes
+because nobody promised anything. That is the whole difference between a cooperative switch and a
+preemptive one, and it is already in your source twice.
 
-- **Floating point and SIMD registers**, `v0` to `v31`. 512 bytes, and untouched as long as the
-  kernel never uses them. `-C target-feature=+strict-align` and the absence of floating point in
-  kernel code is what makes that true, and the day something uses a `f64` it stops being true
-  silently.
-- **`TPIDR_EL0` and thread-local state.** Nothing uses it yet.
+Three more the frame needs an answer for:
 
-Write down, in the guide comment for the switch function, which of these you chose not to save and
-why. That comment is what stops the silent failure later.
+- **Floating point and SIMD registers** - **S**ingle **I**nstruction **M**ultiple **D**ata -
+  `v0` to `v31`, 128 bits each. AAPCS64 splits them exactly the way it splits the general purpose
+  registers, and that split is the whole cost: *"Registers v8-v15 are Callee-saved and the
+  remaining registers (v0-v7, v16-v31) are Caller-saved. Additionally, only the bottom 64 bits of
+  each value stored in v8-v15 need to be Callee-saved; it is the responsibility of the caller to
+  preserve larger values."* So a cooperative switch owes **`d8` to `d15`: 8 registers, 64 bits
+  each, 64 bytes**, and nothing else. Not 512. 512 is what the *preemptive* path owes, for the same
+  reason it owes 31 general purpose registers instead of 12.
+- **`FPSR` and `FPCR`** - the **F**loating **P**oint **S**tatus and **C**ontrol **R**egisters.
+  AAPCS64 says the status register's cumulative exception flags "are not preserved across a public
+  interface and may have any value on entry to a subroutine", so a cooperative switch may ignore
+  it. The control register holds the rounding mode and the manual calls it *global* to the program,
+  which is an argument for one shared value rather than one per task. Ignore both for now, and
+  write down that you did.
+- **`TPIDR_EL0`** - **T**hread **P**o**I**nter / **ID** **R**egister for **E**xception **L**evel
+  **0** - and thread-local state. Nothing uses it yet.
+
+That makes the switch frame **20 registers and 160 bytes**: `x19`-`x30` and `d8`-`d15`.
+
+### Before any of that works, the unit is off
+
+`d8` cannot be saved while floating point is disabled, because the `stp` that saves it is itself a
+floating point instruction and traps like any other. So enabling comes first, and it is one field
+in one register.
+
+`CPACR_EL1` - **C**o**P**rocessor **A**ccess **C**ontrol **R**egister for **E**xception **L**evel
+**1** - carries `FPEN`, **F**loating **P**oint **EN**able, at bits `[21:20]`:
+
+| `FPEN` | what it does |
+| --- | --- |
+| `0b00` | traps these instructions at EL1 and EL0. This is where you are now. |
+| `0b01` | traps at EL0 only; EL1 runs them untrapped |
+| `0b10` | same as `0b00` - traps at EL1 and EL0 |
+| `0b11` | traps nothing |
+
+`0b11` is the one to write while the kernel is the only thing running, which makes the whole value
+`3 << 20`. `0b01` is what you come back for once there are user tasks and you want the trap to tell
+you *which* task touched floating point, so you can save its registers only when it does. That is
+lazy FP switching, and it is a skill of its own rather than part of this one.
+
+Two constraints on where the write goes, and both are hard:
+
+- **In `src/kernel.s`, before `bl kmain`.** The compiler may put a SIMD instruction inside any Rust
+  function once the target allows one - including the function that would have enabled the unit.
+- **Before the first `stp d8`.** Same reason, one level down.
+
+### What flipping the target costs, which is the part to weigh
+
+`.cargo/config.toml` pins `aarch64-unknown-none-softfloat`, whose calling convention has no
+floating point registers in it, so today the compiler cannot emit a `v` register even if `FPEN`
+allows it. Flipping to plain `aarch64-unknown-none` lets it emit them *anywhere* - including inside
+`uart::handle_interrupt` and the timer handler, which sit on a path that **returns**.
+
+`save_all_registers` in `src/vectors.s` saves `x0`-`x30` and nothing else. The day the target
+flips, that path has to grow 512 bytes of `v0`-`v31` plus the status register, or kernel interrupt
+handlers have to be kept provably free of floating point. That is the real price of floating point
+in a kernel: it is charged on every interrupt, not on every switch, and it is why Linux makes
+kernel code ask permission before using SIMD instead of letting the compiler decide.
+
+So split the decision. **Enable `FPEN` and reserve `d8`-`d15` in the frame now** - that costs four
+`stp`/`ldp` pairs per switch, nothing at all on the interrupt path, and it settles the frame layout
+permanently, which is the thing section 4 warns is expensive to change later. **Flip the target
+when something actually needs a float**, and treat the interrupt frame as the piece of work it is.
+
+Write down, in the comment on the switch function, which registers you chose not to save and why.
+That comment is what stops the silent failure later.
 
 ## 4. Where the saved state lives
 
@@ -78,12 +144,18 @@ The cost is that the layout is implicit - it lives in the assembly and in whatev
 stack, and those two must agree exactly. Getting them out of step is the central bug of this skill
 and section 8 is mostly about it.
 
+`docs/diagrams/switch.tldx.jsx` draws it: both stacks, the twelve slots on each, and the `ret`
+leaving through a stack it did not arrive on.
+
 ## 5. Starting a task that has never run
 
 `switch` restores registers and returns. A brand new task has nothing to restore, so its stack is
 constructed to look like it does:
 
-- 12 words of saved registers, all of which can be zero except one.
+- 20 saved registers, which is 160 bytes: `x19`-`x30` and `d8`-`d15`. Not 20 words - a word on
+  aarch64 is 4 bytes, and this is the one place where the layout has to match the assembly exactly.
+  160 is already a multiple of 16, so the frame needs no padding. All 20 slots can be zero except
+  one.
 - That one is the slot where `x30` lands. Put the task's entry point address there. When `switch`
   pops it and executes `ret`, the processor jumps to the entry point, and from the entry point's
   perspective it was simply called.
@@ -92,9 +164,17 @@ The stack pointer stored in the record points at the bottom of that faked frame.
 
 Two details that are easy to get wrong and hard to see:
 
-- **The stack pointer must be 16-byte aligned.** The architecture requires it for `SP`, and a
-  misalignment does not fail at the switch, it fails at the first thing the new task does that
-  touches memory relative to `SP`.
+- **The stack pointer must be 16-byte aligned.** AAPCS64 requires it at every public interface,
+  and the hardware *can* enforce it: `SCTLR_EL1.SA`, bit 3 - **S**tack **A**lignment check - faults
+  on any `SP`-relative access made from a misaligned `SP`, and bit 4 `SA0` does the same for
+  exception level 0. **This kernel sets neither.** `src/mmu/init.rs` builds its `SCTLR_EL1` -
+  **S**ystem **C**on**T**ro**L** **R**egister - out of `M | C | I | WXN` (**W**rite permission
+  implies e**X**ecute **N**ever) and nothing else, so unless the reset value already carries `SA`, a
+  misaligned stack will not fault at all - it will hand every task a frame that is off by eight and
+  surface somewhere unrelated much later. You already print `sctlr_el1` in binary either side of
+  `mmu::enable`; read bit 3 there before trusting either outcome. Setting `SA` is a one-bit change
+  and turns this from silent into a fault at the first access, which is worth doing *before* you
+  write the fake frame rather than after.
 - **The task needs somewhere to return to.** If the entry point ever returns, `x30` holds whatever
   the fake stack said, which is zero, and the task jumps to address 0. Put the address of a
   function that cleanly ends the task there instead, or make the entry point a function that
@@ -106,16 +186,21 @@ Two details that are easy to get wrong and hard to see:
 - A `Task` holding that, its stack region, an identifier, and a state. The state field is not used
   by this skill and is what SCHED will fill in, so keep it minimal now.
 - `switch(from: *mut Context, to: *const Context)` in assembly, in its own `.s` file or a
-  `global_asm!` block. Twelve pushes, one store, one load, twelve pops, one `ret`.
-- A function that builds a task: allocate a stack from the heap - which by now works and can free -
-  write the fake frame, and return the `Task`.
+  `global_asm!` block. Ten pairs down, one store, one load, ten pairs back, one `ret`.
+- A function that builds a task: allocate a stack from the heap, write the fake frame, and return
+  the `Task`. The heap is real now - `src/heap.rs` registers a `#[global_allocator]`, and `kmain`
+  already builds a `Vec`, drops it, and prints the heap returning to its previous size. A task stack
+  is the first allocation in this kernel whose lifetime is not simply "the rest of boot", so it is
+  also the first real exercise of `free`.
 
 The switch is genuinely assembly and this is one of the few places in the project where that is
 not a choice. The stack pointer is being changed under the compiler's feet, and there is no way to
 express that in Rust that is not a lie to the optimiser.
 
-Keep it to `stp` and `ldp` pairs, which store and load two registers at once and are the reason 12
-registers cost 6 instructions rather than 12.
+Keep it to `stp` and `ldp` pairs, which store and load two registers at once and are the reason 20
+registers cost 10 instructions rather than 20. The same two mnemonics take `d` registers as well as
+`x` ones, so the floating point half of the frame is written exactly like the general purpose half -
+`stp d8, d9, [sp, #96]` sits next to `stp x19, x20, [sp]` and needs nothing new learned.
 
 ## 7. When nothing happens
 
@@ -127,14 +212,21 @@ registers cost 6 instructions rather than 12.
 | a fault at an address that looks like a stack pointer with the low bits set | 16-byte alignment. Section 5. |
 | everything works with two tasks and breaks with three | the stack allocation, not the switch. Two stacks can overlap by exactly the amount you would not notice. |
 | the machine hangs with no fault | a task returned. Its `x30` was zero or garbage and it jumped somewhere that does not fault, usually a loop in flash. |
-| stack overflow inside a task corrupts another task | expected without guard pages. LOCKDOWN's guard page applies per task stack, and this is where that becomes a per-task problem rather than a one-stack problem. |
-| a floating point value is wrong after a switch | something started using the SIMD registers. Section 3, and it is the failure that arrives months late. |
+| stack overflow inside a task corrupts another task | expected. LOCKDOWN planted exactly one guard page, and the linker planted it: `__stack_guard_start`, the `guard:` line `kmain` prints, sits below the **boot** stack. A stack allocated from the heap inherits none of that - the page below it is ordinary readable, writable heap. Giving each task stack its own unmapped page is a decision this skill has to make, not a protection it already has. |
+| the very first `stp d8` traps, before anything has been saved | `CPACR_EL1.FPEN` is still `0b00`. It has to be written in `src/kernel.s` before `bl kmain`, not from Rust. |
+| a floating point value is wrong after a switch | `d8`-`d15` are missing from the frame, or they are in it in a different order than the builder wrote. `d0`-`d7` and `d16`-`d31` are not the suspect - they are caller-saved, and the compiler already spilled whatever it needed. |
+| a `f64` is wrong only in code that was interrupted | the target was flipped to `aarch64-unknown-none` without extending `save_all_registers`. Section 3. This one does arrive months late. |
 
 ## 8. How you will know it worked
 
 Two tasks, ping and pong, each with its own stack from the heap, switching to each other a hundred
 times, each printing its own counter at the end and both counters reading 100. Then a clean return
-into `kmain` and the monitor prompt.
+into `kmain`.
+
+Mind the order when you place it: `kmain` ends with `zhemon::Zhemon::new().start()` and then powers
+the machine off through PSCI - the **P**ower **S**tate **C**oordination **I**nterface, the firmware
+call that ends the run - so the monitor never gives control back. The ping-pong has to run
+above that line.
 
 The stronger observable, worth the extra ten minutes: give each task a local variable it sets
 before the switch and checks after, with a different value per task. That is the direct evidence

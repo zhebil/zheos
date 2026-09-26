@@ -8,8 +8,10 @@ use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
+    context::{Task, switch_between},
     frames::MAX_ORDER,
     heap::HEAP,
+    lock::SpinLock,
     memory::{
         bss, data, executable, image, map::MemoryMap, region::Region, rodata, stack, stack_guard,
         text, vectors, writable_data,
@@ -44,6 +46,7 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 
 mod board;
 mod console;
+mod context;
 mod cpu;
 mod dtb;
 mod exception;
@@ -223,6 +226,7 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("tcr_el1: {:b}", cpu::mmu::read_tcr_el1());
     println!("ttbr0_el1: {:b}", cpu::mmu::read_ttbr0_el1());
     println!("sctlr_el1: {:b}", cpu::mmu::read_sctlr_el1());
+    println!("cpacr_el1 is here: {:b}", cpu::mmu::read_cpacr_el1());
 
     mmu::enable(&mut table);
 
@@ -249,12 +253,29 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("0x9000_0000 -> {:?}", table.translate(0x9000_0000));
     println!("sp          -> {:?}", table.translate(cpu::stack_pointer()));
 
+    let Some(ping_task) = Task::new(1, ping) else {
+        println!("Failed to create task 1");
+        halt();
+    };
+
+    let Some(pong_task) = Task::new(2, pong) else {
+        println!("Failed to create task 2");
+        halt();
+    };
+
+    *BOOT.lock() = Some(Task::boot(0));
+    *PING.lock() = Some(ping_task);
+    *PONG.lock() = Some(pong_task);
+
+    switch_between(&BOOT, &PING);
+
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");
     println!("----------------------------------");
 
-    timer::sleep(Duration::from_secs(1));
     zhemon::Zhemon::new().start();
+
+    timer::sleep(Duration::from_secs(1));
 
     shutdown(board.psci)
 }
@@ -274,4 +295,40 @@ fn shutdown(conduit: Conduit) -> ! {
 
     println!("PSCI refused to power the machine off");
     halt()
+}
+
+static BOOT: SpinLock<Option<Task>> = SpinLock::new(None);
+static PING: SpinLock<Option<Task>> = SpinLock::new(None);
+static PONG: SpinLock<Option<Task>> = SpinLock::new(None);
+
+fn ping() -> ! {
+    let mut n = 0;
+    let mut x = 1.0f64;
+    loop {
+        println!("ping {} {}", n, x);
+
+        switch_between(&PING, &PONG);
+
+        n += 1;
+        x *= 2.0;
+
+        if n == 10 {
+            break;
+        }
+    }
+
+    switch_between(&PING, &BOOT);
+    unreachable!("nothing switches back into ping")
+}
+
+fn pong() -> ! {
+    let mut n = 0;
+    let mut x = 1.0f64;
+    loop {
+        println!("pong {} {}", n, x);
+        switch_between(&PONG, &PING);
+
+        n += 1;
+        x *= 2.0;
+    }
 }

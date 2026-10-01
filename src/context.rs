@@ -93,6 +93,8 @@ pub struct Task {
     // None for the boot task, which runs on the stack linker.ld reserves.
     #[allow(dead_code)]
     stack: Option<ContextStack>,
+
+    ticks: usize,
 }
 
 impl Task {
@@ -114,6 +116,7 @@ impl Task {
             id,
             context: Context::new(frame_top),
             stack: Some(stack),
+            ticks: 0,
         })
     }
 
@@ -124,6 +127,7 @@ impl Task {
             id,
             context: Context::new(0),
             stack: None,
+            ticks: 0,
         }
     }
 
@@ -133,5 +137,17 @@ impl Task {
 
     pub fn context_mut(&mut self) -> &mut Context {
         &mut self.context
+    }
+
+    pub fn ticks(&self) -> usize {
+        self.ticks
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn tick(&mut self) {
+        self.ticks += 1;
     }
 }

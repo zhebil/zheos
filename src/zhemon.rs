@@ -1,4 +1,4 @@
-use crate::{console, mmio, print, println, uart::uart};
+use crate::{console, mmio, print, println, sched, uart::uart};
 use console::{Line, read_line, write_new_line};
 use parser::{LineParseError, ParsedCommand, Parser};
 
@@ -38,6 +38,11 @@ impl Zhemon {
 
             if line.buf == b"exit" {
                 return;
+            }
+
+            if line.buf == b"ps" {
+                sched::ps();
+                continue;
             }
 
             match Parser::new(line.buf).validate() {

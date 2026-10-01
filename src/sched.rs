@@ -2,7 +2,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
     context::{Context, Task, switch},
+    heap::HEAP,
     lock::SpinLock,
+    println,
 };
 
 type Tasks = [Option<Task>; TASKS_COUNT];
@@ -45,6 +47,18 @@ static NEED_RESCHEDULE: AtomicBool = AtomicBool::new(false);
 
 pub fn tick() {
     NEED_RESCHEDULE.store(true, Ordering::Relaxed);
+
+    let mut sched = SCHED.lock();
+    let current = sched.current;
+    sched.task_table[current].as_mut().unwrap().tick();
+}
+
+pub fn ps() {
+    let sched = SCHED.lock();
+    for task in sched.task_table.iter().flatten() {
+        println!("Task {}: ticks = {}", task.id(), task.ticks());
+    }
+    HEAP.with(|h| println!("Heap: {}", h))
 }
 
 pub fn preempt() {

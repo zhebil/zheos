@@ -85,6 +85,13 @@ impl Context {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Ready,
+    Blocked,
+    Dead,
+}
+
 pub struct Task {
     #[allow(dead_code)]
     id: usize,
@@ -93,10 +100,14 @@ pub struct Task {
     // None for the boot task, which runs on the stack linker.ld reserves.
     #[allow(dead_code)]
     stack: Option<ContextStack>,
+
+    ticks: usize,
+
+    state: State,
 }
 
 impl Task {
-    pub fn new(id: usize, entry: fn() -> !) -> Option<Self> {
+    pub fn new(id: usize, entry: fn()) -> Option<Self> {
         let stack = ContextStack::new()?;
         // Leave room for the switch frame at the top of the stack
         let frame_top = stack.top() - size_of::<SwitchFrame>();
@@ -114,6 +125,8 @@ impl Task {
             id,
             context: Context::new(frame_top),
             stack: Some(stack),
+            ticks: 0,
+            state: State::Ready,
         })
     }
 
@@ -124,6 +137,8 @@ impl Task {
             id,
             context: Context::new(0),
             stack: None,
+            ticks: 0,
+            state: State::Ready,
         }
     }
 
@@ -133,5 +148,25 @@ impl Task {
 
     pub fn context_mut(&mut self) -> &mut Context {
         &mut self.context
+    }
+
+    pub fn ticks(&self) -> usize {
+        self.ticks
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn tick(&mut self) {
+        self.ticks += 1;
+    }
+
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    pub fn set_state(&mut self, state: State) {
+        self.state = state;
     }
 }

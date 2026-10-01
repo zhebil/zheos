@@ -63,8 +63,4 @@ trampoline:
                 // Unmask interrupts
                 msr     daifclr, #2
                 blr     x19
-                // park
-1:
-                wfi
-                b      1b
-
+                bl      task_exit

@@ -21,3 +21,6 @@ kernel.bin
 
 # tldsl canvas-state sidecars, regenerated on render
 *.tldsl.overlay.json
+
+# Threads posts, videos and scratch work for them
+posts/

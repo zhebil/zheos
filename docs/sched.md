@@ -151,8 +151,8 @@ next slot that holds a task, wrapping around. If that is the current slot, there
 so return.
 
 Why an array and not a queue: tasks sit still in it, and picking the next one needs no allocation
-inside an interrupt handler. A queue that moves tasks around is what you add when tasks can block or
-exit, and neither exists yet - that is the next skill, WAIT.
+inside an interrupt handler. Blocking and exit, in WAIT, need only a state per slot, not a queue. A
+run queue - a list of only the Ready tasks - is what you add when scanning every slot gets too slow.
 
 Two lock rules, both inherited:
 

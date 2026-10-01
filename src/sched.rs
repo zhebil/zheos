@@ -11,6 +11,8 @@ use crate::{
 type Tasks = [Option<Task>; TASKS_COUNT];
 
 const TASKS_COUNT: usize = 4;
+const BOOT_TASK_ID: usize = 0;
+const IDLE_TASK_ID: usize = 1;
 
 pub struct Scheduler {
     task_table: Tasks,
@@ -37,31 +39,37 @@ impl Scheduler {
     }
 
     pub fn next_idx(&self) -> Option<usize> {
-        let current = self.current;
-        let mut next_idx = self.current;
-
         for i in 0..TASKS_COUNT {
-            let idx = (current + i + 1) % TASKS_COUNT;
+            let idx = (self.current + i + 1) % TASKS_COUNT;
             if self.task_table[idx]
                 .as_ref()
-                .is_some_and(|t| t.state() == State::Running)
+                // Skip idle task during scheduling
+                .is_some_and(|t| t.state() == State::Running && t.id() != IDLE_TASK_ID)
             {
-                next_idx = idx;
-                if idx == current {
-                    return None;
-                }
-                break;
+                return Some(idx);
             }
         }
-        Some(next_idx)
+        None
+    }
+
+    pub fn free_id(&self) -> Option<usize> {
+        self.task_table.iter().position(|t| t.is_none())
     }
 }
 
-pub fn spawn(task: Task) -> Result<(), ()> {
-    let mut sched = SCHED.lock();
+pub enum SpawnError {
+    RanOutOfIds,
+    RanOutOfMemory,
+}
 
-    let Some(empty_idx) = sched.task_table.iter().position(|t| t.is_none()) else {
-        return Err(());
+pub fn spawn(entry: fn()) -> Result<(), SpawnError> {
+    let mut sched = SCHED.lock();
+    let Some(empty_idx) = sched.free_id() else {
+        return Err(SpawnError::RanOutOfIds);
+    };
+
+    let Some(task) = Task::new(empty_idx, entry) else {
+        return Err(SpawnError::RanOutOfMemory);
     };
 
     sched.task_table[empty_idx] = Some(task);
@@ -70,7 +78,9 @@ pub fn spawn(task: Task) -> Result<(), ()> {
 
 pub fn init() {
     let mut sched = SCHED.lock();
-    sched.task_table[0] = Some(Task::boot(0));
+    sched.task_table[0] = Some(Task::boot(BOOT_TASK_ID));
+    let idle_task: Task = Task::new(IDLE_TASK_ID, idle).unwrap();
+    sched.task_table[1] = Some(idle_task);
 }
 
 static SCHED: SpinLock<Scheduler> = SpinLock::new(Scheduler::new());
@@ -117,9 +127,11 @@ fn schedule_inner() {
 
     let current = sched.current;
 
-    let Some(next_idx) = sched.next_idx() else {
+    let next_idx = sched.next_idx().unwrap_or(IDLE_TASK_ID);
+
+    if current == next_idx {
         return;
-    };
+    }
 
     let from: *mut Context = sched.task_table[current].as_mut().unwrap().context_mut();
     let to: *const Context = sched.task_table[next_idx].as_ref().unwrap().context();
@@ -144,4 +156,10 @@ pub extern "C" fn task_exit() -> ! {
     schedule();
 
     unreachable!()
+}
+
+pub fn idle() {
+    loop {
+        cpu::wait_for_interrupt();
+    }
 }

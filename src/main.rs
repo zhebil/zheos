@@ -8,7 +8,6 @@ use core::{num::NonZeroU32, time::Duration};
 
 use crate::{
     board::{Board, Conduit},
-    context::Task,
     frames::MAX_ORDER,
     heap::HEAP,
     memory::{
@@ -254,17 +253,15 @@ pub extern "C" fn kmain(dtb_ptr: usize) -> ! {
     println!("sp          -> {:?}", table.translate(cpu::stack_pointer()));
 
     sched::init();
-    let Some(task_a) = Task::new(1, || print_letters('A')) else {
+
+    let Ok(_) = sched::spawn(|| print_letters('A')) else {
         println!("Failed to spawn task_a");
         halt()
     };
-    let Some(task_b) = Task::new(2, || print_letters('B')) else {
+    let Ok(_) = sched::spawn(|| print_letters('B')) else {
         println!("Failed to spawn task_b");
         halt()
     };
-
-    let _ = sched::spawn(task_a);
-    let _ = sched::spawn(task_b);
 
     println!("Hello, ZheOS!");
     println!("Type 'exit' to shutdown the system");

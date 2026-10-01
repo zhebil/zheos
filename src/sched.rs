@@ -1,7 +1,8 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
-    context::{Context, Task, switch},
+    context::{Context, State, Task, switch},
+    cpu,
     heap::HEAP,
     lock::SpinLock,
     println,
@@ -22,6 +23,37 @@ impl Scheduler {
             task_table: [const { None }; TASKS_COUNT],
             current: 0,
         }
+    }
+
+    pub fn prune(&mut self) {
+        for i in 0..TASKS_COUNT {
+            if self.task_table[i]
+                .as_ref()
+                .is_some_and(|t| t.state() == State::Dead && i != self.current)
+            {
+                self.task_table[i] = None;
+            }
+        }
+    }
+
+    pub fn next_idx(&self) -> Option<usize> {
+        let current = self.current;
+        let mut next_idx = self.current;
+
+        for i in 0..TASKS_COUNT {
+            let idx = (current + i + 1) % TASKS_COUNT;
+            if self.task_table[idx]
+                .as_ref()
+                .is_some_and(|t| t.state() == State::Running)
+            {
+                next_idx = idx;
+                if idx == current {
+                    return None;
+                }
+                break;
+            }
+        }
+        Some(next_idx)
     }
 }
 
@@ -68,20 +100,26 @@ pub fn preempt() {
         return;
     }
 
-    let mut sched = SCHED.lock();
-    let current = sched.current;
-    let mut next_idx = current;
+    schedule();
+}
 
-    for i in 0..TASKS_COUNT {
-        let idx = (current + i + 1) % TASKS_COUNT;
-        if sched.task_table[idx].is_some() {
-            next_idx = idx;
-            if idx == current {
-                return;
-            }
-            break;
-        }
-    }
+pub fn schedule() {
+    cpu::without_interrupts(|| {
+        schedule_inner();
+    })
+}
+
+fn schedule_inner() {
+    let mut sched = SCHED.lock();
+
+    // Remove dead tasks from the task table
+    sched.prune();
+
+    let current = sched.current;
+
+    let Some(next_idx) = sched.next_idx() else {
+        return;
+    };
 
     let from: *mut Context = sched.task_table[current].as_mut().unwrap().context_mut();
     let to: *const Context = sched.task_table[next_idx].as_ref().unwrap().context();
@@ -92,4 +130,18 @@ pub fn preempt() {
     unsafe {
         switch(from, to);
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn task_exit() -> ! {
+    let mut sched = SCHED.lock();
+    let current = sched.current;
+
+    let current_task = sched.task_table[current].as_mut().unwrap();
+    current_task.die();
+
+    drop(sched);
+    schedule();
+
+    unreachable!()
 }

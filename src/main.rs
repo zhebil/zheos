@@ -294,7 +294,7 @@ fn shutdown(conduit: Conduit) -> ! {
     halt()
 }
 
-pub fn print_letters(c: char) -> ! {
+pub fn print_letters(c: char) {
     for _ in 0..40 {
         print!("{}", c);
         let mut i = 0;
@@ -306,5 +306,4 @@ pub fn print_letters(c: char) -> ! {
             core::hint::spin_loop();
         }
     }
-    halt()
 }

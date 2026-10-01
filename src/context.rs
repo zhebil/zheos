@@ -85,6 +85,14 @@ impl Context {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Running,
+    #[allow(dead_code)]
+    Blocked,
+    Dead,
+}
+
 pub struct Task {
     #[allow(dead_code)]
     id: usize,
@@ -95,10 +103,12 @@ pub struct Task {
     stack: Option<ContextStack>,
 
     ticks: usize,
+
+    state: State,
 }
 
 impl Task {
-    pub fn new(id: usize, entry: fn() -> !) -> Option<Self> {
+    pub fn new(id: usize, entry: fn()) -> Option<Self> {
         let stack = ContextStack::new()?;
         // Leave room for the switch frame at the top of the stack
         let frame_top = stack.top() - size_of::<SwitchFrame>();
@@ -117,6 +127,7 @@ impl Task {
             context: Context::new(frame_top),
             stack: Some(stack),
             ticks: 0,
+            state: State::Running,
         })
     }
 
@@ -128,6 +139,7 @@ impl Task {
             context: Context::new(0),
             stack: None,
             ticks: 0,
+            state: State::Running,
         }
     }
 
@@ -149,5 +161,13 @@ impl Task {
 
     pub fn tick(&mut self) {
         self.ticks += 1;
+    }
+
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    pub fn die(&mut self) {
+        self.state = State::Dead;
     }
 }

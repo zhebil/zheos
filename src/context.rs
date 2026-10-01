@@ -87,8 +87,7 @@ impl Context {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
-    Running,
-    #[allow(dead_code)]
+    Ready,
     Blocked,
     Dead,
 }
@@ -127,7 +126,7 @@ impl Task {
             context: Context::new(frame_top),
             stack: Some(stack),
             ticks: 0,
-            state: State::Running,
+            state: State::Ready,
         })
     }
 
@@ -139,7 +138,7 @@ impl Task {
             context: Context::new(0),
             stack: None,
             ticks: 0,
-            state: State::Running,
+            state: State::Ready,
         }
     }
 
@@ -167,7 +166,7 @@ impl Task {
         self.state
     }
 
-    pub fn die(&mut self) {
-        self.state = State::Dead;
+    pub fn set_state(&mut self, state: State) {
+        self.state = state;
     }
 }

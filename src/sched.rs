@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::{
     context::{Context, State, Task, switch},
@@ -11,6 +11,8 @@ use crate::{
 type Tasks = [Option<Task>; TASKS_COUNT];
 
 const TASKS_COUNT: usize = 4;
+const _: () = assert!(TASKS_COUNT <= 32);
+
 const BOOT_TASK_ID: usize = 0;
 const IDLE_TASK_ID: usize = 1;
 
@@ -44,7 +46,7 @@ impl Scheduler {
             if self.task_table[idx]
                 .as_ref()
                 // Skip idle task during scheduling
-                .is_some_and(|t| t.state() == State::Running && t.id() != IDLE_TASK_ID)
+                .is_some_and(|t| t.state() == State::Ready && t.id() != IDLE_TASK_ID)
             {
                 return Some(idx);
             }
@@ -150,7 +152,7 @@ pub extern "C" fn task_exit() -> ! {
     let current = sched.current;
 
     let current_task = sched.task_table[current].as_mut().unwrap();
-    current_task.die();
+    current_task.set_state(State::Dead);
 
     drop(sched);
     schedule();
@@ -161,5 +163,61 @@ pub extern "C" fn task_exit() -> ! {
 pub fn idle() {
     loop {
         cpu::wait_for_interrupt();
+    }
+}
+
+pub struct WaitQueue {
+    slots: AtomicU32,
+}
+
+impl WaitQueue {
+    pub const fn new() -> Self {
+        Self {
+            slots: AtomicU32::new(0),
+        }
+    }
+
+    pub fn prepare(&self) {
+        let mut sched = SCHED.lock();
+        let current = sched.current;
+
+        self.slots.fetch_or(1 << current, Ordering::SeqCst);
+
+        sched.task_table[current]
+            .as_mut()
+            .unwrap()
+            .set_state(State::Blocked);
+    }
+
+    pub fn finish(&self) {
+        let mut sched = SCHED.lock();
+        let current = sched.current;
+
+        self.slots.fetch_and(!(1 << current), Ordering::SeqCst);
+
+        sched.task_table[current]
+            .as_mut()
+            .unwrap()
+            .set_state(State::Ready);
+    }
+
+    pub fn wake_all(&self) {
+        let mut sched = SCHED.lock();
+        let waiters = self.slots.swap(0, Ordering::SeqCst);
+
+        if waiters == 0 {
+            return;
+        }
+
+        for i in 0..TASKS_COUNT {
+            if waiters & (1 << i) != 0 {
+                sched.task_table[i]
+                    .as_mut()
+                    .unwrap()
+                    .set_state(State::Ready);
+            }
+        }
+
+        NEED_RESCHEDULE.store(true, Ordering::Relaxed);
     }
 }

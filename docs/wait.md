@@ -53,8 +53,8 @@ What changes:
 
 ## 4. The idea: a state per task
 
-Today `pick` takes the next slot that holds a task. Change one rule: take the next slot whose task
-is **Ready**.
+Today the loop in `preempt()` takes the next slot that holds a task. Move it into a method on
+`Scheduler`, `next_idx`, and change one rule: take the next slot whose task is **Ready**.
 
 That is the whole mechanism for both new abilities. To sleep, a task marks itself **Blocked** and
 calls `schedule()`, which switches to someone else - and the picker will not choose it again until
@@ -73,17 +73,23 @@ build when scanning every slot gets too slow. Not yet.
 ## 5. Exit: a task cannot free its own stack
 
 When a task's function returns, it has nowhere to go. Today the trampoline parks it. Instead, the
-trampoline branches to a Rust function, `task_exit`, which marks the task Dead and calls
-`schedule()`. The function type becomes `fn()` instead of `fn() -> !`, and `print_letters` just
-returns.
+trampoline calls a Rust function, `task_exit`, which marks the task Dead and calls `schedule()`.
+The function type becomes `fn()` instead of `fn() -> !`, and `print_letters` just returns.
+
+`task_exit` is called from assembly by name, so it needs `#[unsafe(no_mangle)]` (keep the symbol
+called exactly `task_exit`) and `extern "C"` (use the standard calling convention). It returns `!`.
+`schedule()` never comes back to a Dead task, but the compiler cannot know that, so the function
+ends in `unreachable!()` - if it ever does come back, you get a panic instead of running garbage.
 
 The dead task's stack has to be freed, but **not by the dead task**. It is standing on that stack
 while it calls `schedule()`, and `switch` writes its `sp` into its `Context` on the way out. Free it
-too early and both of those write into freed memory.
+too early and both of those write into freed memory. So `task_exit` only *marks* the task Dead
+(`set_state`). It never empties its own slot.
 
-So someone else does it, later. At the start of every `schedule()`, before picking: every slot that
-is Dead and is **not** `current` becomes `None`. Dropping the `Task` drops its `ContextStack`, which
-gives the 16 KiB back to the heap. By then the dead task is off the CPU for good.
+Someone else frees it, later. At the start of every `schedule()`, before picking, `prune` turns
+every slot that is Dead and is **not** `current` into `None`. Dropping the `Task` drops its
+`ContextStack`, which gives the 16 KiB back to the heap. By then the dead task is off the CPU for
+good.
 
 Linux does the same thing in `finish_task_switch`: the next task, right after the switch, releases
 the stack of the one that died.
@@ -99,8 +105,21 @@ never exits. The picker only chooses it when no other task is Ready. When a key 
 interrupt wakes zhemon, and on the way out of that interrupt `preempt()` switches from idle to
 zhemon (section 7 says why it does not wait for the tick).
 
-Put idle in a fixed slot, `IDLE = 1`, right after boot, so the picker can skip it by number. Linux
-keeps an idle task per core for the same reason, and in Linux 0.01 it was task 0.
+Put idle in a fixed slot, `IDLE_TASK_ID = 1`, right after boot, so `next_idx` can skip it by
+number. Linux keeps an idle task per core for the same reason, and in Linux 0.01 it was task 0.
+
+**Two different "nobody else" answers.** `next_idx` searches every slot after `current`, wrapping
+around, and ends on `current` itself. That gives three outcomes, and they must stay apart:
+
+| situation | `next_idx` returns | `schedule()` does |
+| --- | --- | --- |
+| another task is Ready | `Some(that slot)` | switches to it |
+| only `current` is Ready | `Some(current)` | returns, no switch |
+| nobody is Ready | `None` | switches to idle (`unwrap_or(IDLE_TASK_ID)`) |
+
+The trap is SCHED's old loop, which returned early when the search landed on `current`. Keep that
+as `None` and it now means "run idle": zhemon is Ready, yet every tick swaps it out for idle.
+Observed: step 3's `ps` gave zhemon 45 ticks and idle 33, where idle should have 0.
 
 ## 7. Sleeping without missing the wakeup
 
@@ -144,6 +163,17 @@ means "slot *n* is waiting". An `AtomicU32` needs no lock, and wake all is one `
 cores, and `SeqCst` is the ordering that promises it. Linux puts a full memory barrier at the same
 spot, in `set_current_state`.
 
+The queue lives in `sched.rs`, because every operation also changes a task's state. Each one takes
+the `SCHED` lock itself and holds it across both halves - the bit and the state - so wake all can
+never land between "I joined" and "I am Blocked". The static in `input.rs` is a plain
+`WaitQueue`, not a `SpinLock<WaitQueue>`: the atomic already makes it safe to share.
+
+**Never hold a lock across `schedule()`.** The task that would take it next may be the one that
+wakes you. In `getc`, pop in one statement - `INPUT_BUFFER.lock().pop()` - so the guard is a
+temporary, dropped at the `;`. Bind the guard to a `let` instead, or wrap the queue in a
+`SpinLock`, and zhemon sleeps holding a lock that `push_character` needs. Observed: the first key
+never echoes, and about 15 seconds later `failed to acquire lock after 16777216 attempts`.
+
 **`schedule()` masks interrupts itself.** Between dropping the lock and finishing `switch`, an
 interrupt would run a second `schedule()` while `current` already names the next task - and it would
 save the running task's `sp` into the wrong `Context`. `preempt()` always calls it with interrupts
@@ -158,11 +188,13 @@ same things. So measure it:
 
 - each `Task` gets a `ticks` counter;
 - `sched::tick()`, which the timer already calls, adds one to the current task's counter;
-- a `ps` line in zhemon lists every task in the table - slot, id, state, ticks - and then the heap
-  line, `heap: N of M pages free`, that `kmain` already prints at boot.
+- a `ps` line in zhemon lists every task in the table - its id and its ticks - and then the heap
+  line, `N of M pages free`, that `kmain` already prints at boot.
 
-A tick is counted for whoever was running when it hit, so `ticks` is how much of the CPU each task
-has used. Linux keeps the same count per task, and `ps` reads it.
+A tick is a **sample**, not a stopwatch: every 10 ms, one tick goes to whoever is on the CPU at that
+instant. Over many ticks, that adds up to how much of the CPU each task used. A task that runs for a
+few microseconds per key - zhemon, once it sleeps - is almost never the one caught, so it reads 0.
+Linux kept the same sampled count per task, and `ps` read it.
 
 zhemon already treats `exit` as a whole-line command before the parser runs. `ps` goes right next to
 it.
@@ -171,50 +203,57 @@ it.
 
 | value | what | derivation |
 | --- | --- | --- |
-| `IDLE = 1` | idle's slot | slot 0 is boot, and `init` creates idle right after it. Any fixed slot works, as long as `pick` can skip it by number. |
+| `BOOT_TASK_ID = 0` | the boot task's slot | the code already running when `init` is called, adopted as a task in SWITCH. It runs zhemon. |
+| `IDLE_TASK_ID = 1` | idle's slot | `init` creates idle right after boot. Any fixed slot works, as long as `next_idx` can skip it by number. |
 | `TASKS_COUNT = 4` | table size | unchanged. Boot, idle, A and B now fill it, so a third `spawn` fails. |
 | `u32` for the wait queue | 32 bits, one per slot | `TASKS_COUNT` must stay at most 32; a `const` assert holds that. `AtomicU64` would allow 64. |
 | `1 << slot` | the bit for one slot | `fetch_or(1 << slot)` adds it, `fetch_and(!(1 << slot))` removes it - `!` flips every bit, so the mask keeps all bits but that one. |
 | `swap(0)` | wake all | takes every waiter and empties the queue in one step, so a task cannot be added in between and missed. |
-| 4 pages | one task's stack | 16 KiB / 4 KiB pages. Two exited tasks give back 8. |
+| 4 pages | one task's stack | 16 KiB / 4 KiB pages. Two exited tasks give back 8; idle holds 4 for good. |
 
 ## 10. What you are building
 
 In this order. Each step boots and has a number to check.
 
+Every heap check is against the last `heap:` line `kmain` prints at boot, before any task exists -
+**in the same run**. That boot number moved by one page between builds of this branch, so the `ps`
+numbers below are only comparable with the boot line printed next to them.
+
 **Step 1 - ticks and `ps`.** A `ticks` field on `Task`, counted in `sched::tick()`. A `sched::ps()`
-that prints the table and the heap line. zhemon calls it on the line `ps`.
+that prints each task's id and ticks, then the heap line. zhemon calls it on the line `ps`.
 *Check:* `make feed INPUT='ps'`. The feed types it about one second after boot. Mine printed:
 
 ```
-slot 0 id 0 ticks 32
-slot 1 id 1 ticks 32
-slot 2 id 2 ticks 32
-heap: 32411 of 32768 pages free
+Task 0: ticks = 33
+Task 1: ticks = 33
+Task 2: ticks = 33
+Heap: 32412 of 32768 pages free
 ```
 
-A and B finished their letters long before, and zhemon was only waiting - yet each has a third of
-the CPU. Both problems, in numbers.
+with `heap: 32420 of 32768 pages free` as the boot line: 8 pages below it, for A and B's stacks. A
+and B finished their letters long before, and zhemon was only waiting - yet each has a third of the
+CPU. Both problems, in numbers.
 
 **Step 2 - exit.** A `State` enum with `Ready` and `Dead` (`Blocked` comes in step 4; clippy
-rejects an unused variant). `pick` skips anything not Ready. Split `schedule()` out of `preempt()`,
-mask interrupts inside it, and reap Dead slots at its start. In `switch.s`, after `blr x19`, branch
-to `task_exit` and delete the park loop - nothing reaches it any more. `Task::new` takes `fn()`;
-`print_letters` returns.
-*Check:* `ps` shows only slot 0, now with all the ticks, and **8 more pages free** than in step 1 -
-the two stacks came back. Mine: `slot 0 id 0 Ready ticks 75`, `heap: 32419 of 32768 pages free`.
+rejects an unused variant), and a `set_state` on `Task`. `next_idx` skips anything not Ready.
+Split `schedule()` out of `preempt()`, mask interrupts inside it, and `prune` Dead slots at its
+start. In `switch.s`, after `blr x19`, `bl task_exit` and delete the park loop - nothing reaches it
+any more. `Task::new` takes `fn()`; `print_letters` returns.
+*Check:* `ps` shows only task 0, now with all the ticks, and the heap is **back at the boot line** -
+the two stacks came back. Mine: `Task 0: ticks = 74`, `Heap: 32419`, boot line 32419.
 
-**Step 3 - idle.** `init` creates the idle task in slot `IDLE`. `pick` skips `IDLE` in its search
-and returns it only when nothing else is Ready. Now that `init` owns slot 1, let `spawn` take the
-entry function and create the `Task` itself, using the slot number as the id, so ids and slots
-cannot drift apart.
-*Check:* `ps` shows idle with **0 ticks** - zhemon is always Ready, so idle is never picked - and 4
-pages fewer free than step 2, for idle's stack. Mine: `slot 0 ... ticks 76`, `slot 1 ... ticks 0`,
-`heap: 32415 of 32768 pages free`.
+**Step 3 - idle.** `init` creates the idle task in slot `IDLE_TASK_ID`. `next_idx` skips it, and
+`schedule()` falls back to it on `None` (section 6). Now that `init` owns slot 1, let `spawn` take
+the entry function and create the `Task` itself, using the slot number as the id, so ids and slots
+cannot drift apart. It can fail two ways - no free slot, or no memory for the stack - so it returns
+a `SpawnError` with one variant for each.
+*Check:* `ps` shows idle with **0 ticks** - zhemon is always Ready, so idle is never picked - and the
+heap 4 pages below the boot line, for idle's stack. Mine: `Task 0: ticks = 76`, `Task 1: ticks = 0`,
+`Heap: 32415`, boot line 32419.
 
-**Step 4 - sleep.** Add `Blocked`. A `WaitQueue` in `sched` with prepare, finish and wake all. A
-static queue in `input.rs`; `getc` does the sequence from section 7 inside `without_interrupts`,
-and `push_character` wakes the queue after pushing.
+**Step 4 - sleep.** Add `Blocked`. A `WaitQueue` in `sched` with `prepare`, `finish` and
+`wake_all`. A static `INPUT_WAIT_QUEUE` in `input.rs`; `getc` does the sequence from section 7
+inside `without_interrupts`, and `push_character` wakes the queue after pushing.
 *Check:* section 12.
 
 ## 11. When something goes wrong
@@ -223,8 +262,10 @@ All observed on this kernel.
 
 | symptom | almost certainly |
 | --- | --- |
-| `called Option::unwrap() on a None value` in `schedule` when a task exits | the reaper freed the current task too. Skip `current` (section 5). |
-| `entered unreachable code` in `task_exit` | `pick` fell back to `current` instead of idle, so a dead task was switched back into (section 6). |
+| `called Option::unwrap() on a None value` in `schedule` when a task exits | the current task's slot was emptied: `task_exit` set it to `None` instead of marking it Dead, or `prune` did not skip `current` (section 5). |
+| `entered unreachable code` in `task_exit` | `next_idx` fell back to `current` instead of idle, so a dead task was switched back into (section 6). |
+| idle has ticks while zhemon is still Ready (step 3) | `next_idx` returns `None` for "only `current` is Ready", and `schedule()` reads that as "run idle" (section 6). |
+| the first key never echoes; ~15 s later `failed to acquire lock after 16777216 attempts` | `getc` called `schedule()` while holding the input buffer's lock or a lock around the queue (section 7). |
 | `exit` echoes, then the machine never powers off | `schedule()` runs with interrupts unmasked when a task calls it directly (end of section 7). |
 | zhemon echoes part of a line, then ignores the rest until another key | the sleep in `getc` is not inside `without_interrupts`, and a tick landed mid-sequence (section 7). Rare, since the gap is a few instructions. |
 
@@ -236,20 +277,23 @@ All observed on this kernel.
 Hello, ZheOS!
 Type 'exit' to shutdown the system
 ----------------------------------
-\AAAABBBBAAABBBAAAABBBBAAABBBBAAABBBBAAABBBBAAAABBBBAAABBBBAAAABBBAAAABBBBAAAABBps
-slot 0 id 0 Ready ticks 0
-slot 1 id 1 Ready ticks 76
-heap: 32415 of 32768 pages free
+\AAABBBBBAAABBBAAAABBBAAAABBAAAABBBBAAAABBBBAAABBBAAABBBBAAABBBAAAABBBAAAABBBABBBps
+Task 0: ticks = 0
+Task 1: ticks = 75
+Heap: 32415 of 32768 pages free
 \exit
 ```
 
-and QEMU exits on its own in about 3 seconds.
+and `make feed` returns after about 3 seconds. A hang runs until the feed's timeout kills QEMU,
+which took 16.
 
-- **zhemon has 0 ticks.** It spent the whole second asleep, not spinning. In step 1 it had 32.
+Task 0 is the boot task, which runs zhemon; task 1 is idle.
+
+- **zhemon has 0 ticks.** It spent the whole second asleep, not spinning. In step 1 it had 33.
 - **idle has the rest.** With A and B gone and zhemon asleep, idle is the only one left, and it
   spends that time in `wfi`.
-- **A and B are gone, and their stacks with them.** Only slots 0 and 1 remain, and the heap line
-  matches step 3.
+- **A and B are gone, and their stacks with them.** Only tasks 0 and 1 remain, and the heap line
+  matches step 3: 4 below the boot line, for idle.
 - **`ps` answered and `exit` worked.** Each key woke zhemon out of its sleep, so wake all reached it
   every time.
 - Exact tick counts drift by one or two between runs. The shape - zhemon at or near 0, idle with the

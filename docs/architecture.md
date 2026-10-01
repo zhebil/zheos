@@ -176,7 +176,9 @@ So each later skill adds a folder or a file rather than a new top-level module:
 | RAMDISK, FILES, PIPES | `fs/` |
 | TERMINAL | `tty/` |
 | SIGNALS | `kernel/signal.rs`, with the signal frame in `arch/aarch64/signal.rs` |
+| TIMEKEEPER, HANDS | `drivers/pl031.rs`, `drivers/pl061.rs` |
 | CLOCKS | `kernel/time.rs` |
+| THREADS | `kernel/fork.rs` for `clone`'s sharing flags, `kernel/futex.rs` |
 | VIRTIO, KEYS | `drivers/virtio/` |
 | PIXELS, SCREEN DEVICE | `drivers/firmware/fw_cfg.rs`, `drivers/video/` |
 | STORAGE, DISK FS | `drivers/virtio/`, `block/`, `fs/ext2/` |

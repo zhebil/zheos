@@ -192,8 +192,10 @@ against musl and running on zheos in the QEMU window. That goal decides three th
 | **PIPES** | A bounded buffer with two ends | `a \| b`. |
 | **TERMINAL** | Linux's tty: canonical and raw mode, termios | A shell can edit its own line. |
 | **SIGNALS** | Handlers, delivery on the way back to EL0, `rt_sigreturn` | Ctrl-C, and a parent told its child died. |
+| **TIMEKEEPER** | The PL031 real-time clock, from its manual alone | Wall-clock time, so CLOCKS can answer `CLOCK_REALTIME`. A second device, deliberately easy. |
 | **CLOCKS** | `clock_gettime`, `nanosleep`, a timer list | Time for programs, and many sleepers each waking on time. |
 | **BUSYBOX** | Static busybox as process 1 | Milestone: a real Unix shell with `ls`, `cat`, `grep` and pipes. |
+| **THREADS** | `clone` sharing an address space, `futex` | Programs that do two things at once. |
 
 ## Tier 8 - Senses
 
@@ -201,32 +203,46 @@ against musl and running on zheos in the QEMU window. That goal decides three th
 
 | Skill | What it really is | What it unlocks |
 |---|---|---|
+| **HANDS** | The PL061 GPIO controller | The closest thing here to Ben's 6522 parallel port, and one more plain MMIO device before VIRTIO's rings. |
 | **VIRTIO** | The virtio-mmio transport and its rings, first device virtio-rng | Every virtual device QEMU offers: storage, network, input, random numbers. |
 | **PIXELS** | QEMU's `ramfb`, configured through `fw_cfg` | A screen. |
 | **SCREEN DEVICE** | `/dev/fb0`, its ioctls, `mmap` into a program | Programs draw. |
 | **KEYS** | virtio-input as `/dev/input/event0` | Key presses *and* releases, which a game needs and a serial line cannot give. |
+| **STORAGE** | virtio-blk | A real disk. |
+| **DISK FS** | ext2, Linux's own filesystem, in the VFS | Files that survive a reboot. |
 
-## Tier 9 - DOOM
+## Tier 9 - Wires
+
+*The machine talks to other machines.*
+
+| Skill | What it really is | What it unlocks |
+|---|---|---|
+| **WIRE** | virtio-net, Ethernet, ARP, IPv4, ICMP | zheos answers a ping, and pings back. |
+| **SOCKETS** | UDP sockets as file descriptors | Programs on the network. |
+| **TCP** | Connections, retransmits, `connect`, `listen`, `accept` | Reliable streams: fetch a page from the host. |
+
+## Tier 10 - DOOM
 
 | Skill | What it really is | What it unlocks |
 |---|---|---|
 | **DOOM** | doomgeneric, static against musl, with a backend on Linux APIs and the shareware WAD in the ramdisk | E1M1, playable. |
 
-## Side quests
+DOOM waits for every other skill in the tree, not only the ones it technically needs. It is the
+last thing, not the next thing.
 
-Optional branches. None of them are on DOOM's path, all of them teach something the main line
-does not.
+## Crates
 
-| Skill | Needs | Why bother |
-|---|---|---|
-| **TIMEKEEPER** | LANGUAGE | A second device, deliberately easy. Proves the driver pattern transfers to a chip you have never seen, from its manual alone. Also gives CLOCKS a `CLOCK_REALTIME`. |
-| **HANDS** | SIGNAL | The PL061 GPIO controller, the closest thing here to Ben's 6522 parallel port. |
-| **STORAGE** | VIRTIO | A real disk through virtio-blk. |
-| **DISK FS** | STORAGE, FILES | ext2, Linux's own filesystem, mounted into the VFS. |
-| **WIRE** | VIRTIO | virtio-net, Ethernet, ARP, IPv4: answer a ping. |
-| **SOCKETS** | WIRE, FILES | UDP for programs, sockets as file descriptors. |
-| **TCP** | SOCKETS, CLOCKS | Reliable connections: retransmits, connect, listen, accept. |
-| **THREADS** | FORK, MEMORY MAP | Tasks that share an address space, and `futex`. |
+The project has no dependencies, and by default it stays that way: a crate that hides hardware is
+a skill not learned. A few later skills are big enough that a crate is a fair trade, and each one
+names its candidate in its beads notes, to be decided at the start of that skill and not before:
+
+- **WIRE** - smoltcp, a `no_std` TCP/IP stack. The decision is made here rather than at TCP,
+  because smoltcp owns ARP and IP as well; a hand-written lower half and a borrowed TCP do not mix.
+- **DISK FS** - `fatfs` instead of hand-written ext2, if the filesystem is not the point.
+- **VIRTIO** - `virtio-drivers` was considered and is not recommended: the rings are the lesson.
+
+Whatever is borrowed sits behind the folder's own surface (`net/`, `fs/`), so the kernel above it
+never learns which it is.
 
 ## Where things stand
 

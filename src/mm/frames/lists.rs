@@ -31,6 +31,7 @@ impl FreeLists {
     }
 
     // Slow method, debug only
+    #[allow(dead_code)]
     pub fn blocks(&self, order: usize) -> usize {
         let mut count = 0;
         let mut current = self.head(order);

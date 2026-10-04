@@ -12,6 +12,7 @@ pub fn write_sctlr_el1(sctlr_el1: u64) {
 }
 
 // Translation Control Register
+#[allow(dead_code)]
 pub fn read_tcr_el1() -> u64 {
     let tcr_el1: u64;
     unsafe { asm!("mrs {}, TCR_EL1", out(reg) tcr_el1, options(nostack)) }
@@ -23,6 +24,7 @@ pub fn write_tcr_el1(tcr_el1: u64) {
 }
 
 // Translation Table Base Register
+#[allow(dead_code)]
 pub fn read_ttbr0_el1() -> u64 {
     let ttbr0_el1: u64;
     unsafe { asm!("mrs {}, TTBR0_EL1", out(reg) ttbr0_el1, options(nostack)) }
@@ -34,6 +36,7 @@ pub fn write_ttbr0_el1(ttbr0_el1: u64) {
 }
 
 // Memory Attribute Indirection Register
+#[allow(dead_code)]
 pub fn read_mair_el1() -> u64 {
     let mair_el1: u64;
     unsafe { asm!("mrs {}, MAIR_EL1", out(reg) mair_el1, options(nostack)) }
@@ -45,6 +48,7 @@ pub fn write_mair_el1(mair_el1: u64) {
 }
 
 // Coprocessor Access Control Register
+#[allow(dead_code)]
 pub fn read_cpacr_el1() -> u64 {
     let cpacr_el1: u64;
     unsafe { asm!("mrs {}, CPACR_EL1", out(reg) cpacr_el1, options(nostack)) }

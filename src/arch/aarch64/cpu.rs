@@ -4,6 +4,7 @@ pub fn wait_for_interrupt() {
     unsafe { asm!("wfi") }
 }
 
+#[allow(dead_code)]
 pub fn stack_pointer() -> usize {
     let sp: usize;
     unsafe { asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags)) };

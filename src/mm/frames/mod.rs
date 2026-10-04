@@ -35,6 +35,7 @@ impl Frames {
         frames
     }
 
+    #[allow(dead_code)]
     pub fn free_blocks(&self, order: usize) -> usize {
         self.lists.blocks(order)
     }

@@ -43,10 +43,7 @@ struct HeartbeatTicks(u64);
 
 impl HeartbeatTicks {
     fn rate() -> u64 {
-        let hz = HZ.load(Ordering::Relaxed);
-        // assert!(hz != 0, "timer::init has not run");
-
-        hz
+        HZ.load(Ordering::Relaxed)
     }
 
     fn since_boot() -> Self {

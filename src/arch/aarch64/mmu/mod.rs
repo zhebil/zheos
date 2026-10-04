@@ -3,13 +3,8 @@ use core::{alloc::Layout, fmt::Display, ptr::NonNull};
 use descriptor::{Descriptor, Kind};
 use level::Level;
 use policy::Mapping;
-use registers::{read_cpacr_el1, read_mair_el1, read_sctlr_el1, read_tcr_el1, read_ttbr0_el1};
 
-use super::cpu;
-use crate::{
-    mm::{HEAP, Heap, PAGE_SIZE, Region, gaps, image},
-    println,
-};
+use crate::mm::{HEAP, Heap, PAGE_SIZE, Region, gaps, image};
 
 mod descriptor;
 mod init;
@@ -105,12 +100,14 @@ impl Table {
         self.map_range(heap, region, template, Level::Level1)
     }
 
+    #[allow(dead_code)]
     /// Walk the table the way the hardware would and report where `va` lands, or
     /// `None` if nothing is mapped there.
     pub fn translate(&self, va: usize) -> Option<usize> {
         self.translate_at(va, Level::Level1).map(|(addr, _)| addr)
     }
 
+    #[allow(dead_code)]
     pub fn translate_with_level(&self, va: usize) -> Option<(usize, Level)> {
         self.translate_at(va, Level::Level1)
     }
@@ -255,6 +252,7 @@ impl Table {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn translate_at(&self, va: usize, level: Level) -> Option<(usize, Level)> {
         let descriptor = self.get(level.slot_of(va));
 
@@ -323,36 +321,7 @@ pub fn init(memory: Region, dtb: Region) -> Result<(), PlanError> {
         table.apply(h, devices, &[], Descriptor::DEVICE_BLOCK)
     })?;
 
-    println!("mair_el1: {:b}", read_mair_el1());
-    println!("tcr_el1: {:b}", read_tcr_el1());
-    println!("ttbr0_el1: {:b}", read_ttbr0_el1());
-    println!("sctlr_el1: {:b}", read_sctlr_el1());
-    println!("cpacr_el1 is here: {:b}", read_cpacr_el1());
-
     init::init(&mut table);
-
-    println!("sctlr_el1: {:b}", read_sctlr_el1());
-
-    println!("table: {:#012x}", table.base());
-
-    for mapping in &plan {
-        println!(
-            "  {}: {:x?}",
-            mapping.name,
-            table.translate_with_level(mapping.region.base)
-        );
-    }
-
-    HEAP.with(|h| {
-        println!("heap: {h}");
-    });
-
-    println!("0x0900_0000 -> {:?}", table.translate(0x0900_0000));
-    println!("0x4008_0000 -> {:?}", table.translate(0x4008_0000));
-    println!("0x4400_0000 -> {:?}", table.translate(0x4400_0000));
-    println!("0x4800_0000 -> {:?}", table.translate(0x4800_0000));
-    println!("0x9000_0000 -> {:?}", table.translate(0x9000_0000));
-    println!("sp          -> {:?}", table.translate(cpu::stack_pointer()));
 
     Ok(())
 }

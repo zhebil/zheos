@@ -84,6 +84,7 @@ impl Heap {
             .free(&mut self.pages, Pfn::from_addr_down(address));
     }
 
+    #[allow(dead_code)]
     pub fn frames(&self) -> &Frames {
         &self.frames
     }

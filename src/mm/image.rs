@@ -2,13 +2,8 @@ use crate::mm::region::Region;
 
 unsafe extern "C" {
     static __image_start: u8;
-    static __text_end: u8;
-    static __vectors_start: u8;
-    static __vectors_end: u8;
     static __exec_end: u8;
     static __rodata_end: u8;
-    static __data_end: u8;
-    static __bss_start: u8;
     static __stack_guard_start: u8;
     static __stack_bottom: u8;
     static __stack_top: u8;
@@ -48,26 +43,6 @@ pub fn writable_data() -> Region {
 /// overflows faults here instead of running on into .bss.
 pub fn stack_guard() -> Region {
     between(&raw const __stack_guard_start, &raw const __stack_bottom)
-}
-
-/// Instructions alone. Inside [`executable`], for reporting only.
-pub fn text() -> Region {
-    between(&raw const __image_start, &raw const __text_end)
-}
-
-/// The exception vector table `VBAR_EL1` points at. Inside [`executable`].
-pub fn vectors() -> Region {
-    between(&raw const __vectors_start, &raw const __vectors_end)
-}
-
-/// Initialised data. Inside [`writable_data`].
-pub fn data() -> Region {
-    between(&raw const __rodata_end, &raw const __data_end)
-}
-
-/// Zeroed data. Inside [`writable_data`].
-pub fn bss() -> Region {
-    between(&raw const __bss_start, &raw const __stack_guard_start)
 }
 
 /// The kernel stack. Mapped on its own, above the guard page.

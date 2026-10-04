@@ -49,7 +49,6 @@ pub enum State {
 }
 
 pub struct Task {
-    #[allow(dead_code)]
     id: usize,
     context: Context,
     // Never read, only dropped: its Drop frees the memory context.sp points into.

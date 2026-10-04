@@ -1,0 +1,66 @@
+use core::arch::asm;
+
+pub fn wait_for_interrupt() {
+    unsafe { asm!("wfi") }
+}
+
+#[allow(dead_code)]
+pub fn stack_pointer() -> usize {
+    let sp: usize;
+    unsafe { asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags)) };
+    sp
+}
+
+/// Unmasks IRQ and FIQ. `daifclr` *clears* mask bits - the opposite of `daifset`.
+pub fn unmask_irqs() {
+    unsafe {
+        asm!("msr daifclr, #3", options(nostack, preserves_flags));
+    }
+}
+
+/// Runs `f` with IRQs masked, then puts DAIF back exactly as it was.
+///
+/// Restoring rather than unmasking is what makes this safe to call from a
+/// handler, where exception entry has already masked everything.
+pub fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
+    let daif = stop_interrupts();
+
+    let result = f();
+
+    restore_interrupts(daif);
+
+    result
+}
+
+pub fn stop_interrupts() -> u64 {
+    let daif = read_daif();
+    mask_irqs();
+    daif
+}
+
+pub fn restore_interrupts(daif: u64) {
+    restore_daif(daif);
+}
+
+fn read_daif() -> u64 {
+    let daif: u64;
+    // No nomem on any of these: they must act as compiler barriers, or the
+    // optimiser is free to hoist a read of the data they protect out of the
+    // surrounding loop and spin forever on a stale value.
+    unsafe {
+        asm!("mrs {}, daif", out(reg) daif, options(nostack, preserves_flags));
+    }
+    daif
+}
+
+fn mask_irqs() {
+    unsafe {
+        asm!("msr daifset, #2", options(nostack, preserves_flags));
+    }
+}
+
+fn restore_daif(daif: u64) {
+    unsafe {
+        asm!("msr daif, {}", in(reg) daif, options(nostack, preserves_flags));
+    }
+}

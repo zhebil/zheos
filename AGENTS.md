@@ -81,10 +81,14 @@ Cargo.toml           panic = "abort", debug symbols on in release
 .cargo/config.toml   pins target = aarch64-unknown-none
 build.rs             passes -Tlinker.ld, plus rerun-if-changed so edits rebuild
 linker.ld            layout; ENTRY(_start), plants __bss_start/__bss_end/__stack_top
-src/kernel.s         stack, .bss zeroing, calls kmain. Pulled in by global_asm!(include_str!)
-src/main.rs          kmain, panic handler, bit_mask
-src/uart.rs          PL011 driver
+src/main.rs          kmain, in boot order; nothing else
+src/arch/aarch64/    everything that names a CPU register: boot.s, vectors, switch, MMU, timer
+src/drivers/         PL011, GIC
+src/platform/        device tree parser and Board - what is where
+src/mm/ kernel/ lib/ tty/ zhemon/   generic code, no hardware knowledge
 ```
+
+`docs/architecture.md` has the rules for what goes where.
 
 `make kernel.elf` runs cargo and copies the output to `kernel.elf` at the repo root, which is
 the path the debugger and every QEMU target use. There is no separate assembler step.

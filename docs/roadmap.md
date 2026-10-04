@@ -144,29 +144,105 @@ own metadata and the bump allocator becomes ten lines inside its constructor.
 
 | Skill | What it really is | What it unlocks |
 |---|---|---|
-| **MANY CORES** | Wake the other processors with PSCI | Four cores instead of one. Every `unsafe impl Sync` argument has to be true rather than plausible, which is why LOCK is built first. |
 | **SWITCH** | Save one context, restore another, return into different code | Two things can take turns. Assembly, unavoidably. |
-| **SCHED** | A task table and a timer handler that picks the next one | Preemption: tasks are switched without ever agreeing to it. Written multi-core from the start, because a single-core scheduler is a different design and not a smaller one. |
-| **TWO WORLDS** | Drop to EL0 and add syscalls | A privilege boundary. The moment this stops being a program and becomes an operating system. |
+| **SCHED** | A task table and a timer handler that picks the next one | Preemption: tasks are switched without ever agreeing to it. |
+| **WAIT** | A state per task, wait queues, exit, an idle task | Tasks sleep until something happens and end for good. zhemon waits for a key without using the CPU. |
 | **MANY HANDS** | All of it together | More than one thing running. The first structure that genuinely deserves the word kernel. |
 
-Deliberately last. Everything below it is a prerequisite, and attempting it early is the
-classic way to build something that half works and cannot be debugged.
+Tier 5 is complete. MANY CORES and TWO WORLDS used to sit here; they moved to Tier 6, after the
+kernel has a shape.
 
-## Side quests
+## The final milestone: DOOM
 
-Optional branches. None of them are on the critical path, all of them teach something the main
-line does not.
+Every tier from here leads to one goal: **unmodified Linux programs, ending with Doom**, built
+against musl and running on zheos in the QEMU window. That goal decides three things up front:
 
-| Skill | Needs | Why bother |
+- **System calls are Linux's**, numbers and all, from the very first one (TWO WORLDS). Every call
+  added is a step towards running real binaries.
+- **Processes are made with `fork` and `execve`**, not a home-grown `spawn`, because that is what
+  Linux programs, and shells above all, do.
+- **Devices are exposed the Linux way**: a terminal with termios, `/dev/fb0` for the screen,
+  `/dev/input/event0` for the keyboard. Doom's backend is written against those, so it also runs
+  on Linux unchanged.
+
+## Tier 6 - Citizens
+
+*Programs the kernel does not trust.*
+
+| Skill | What it really is | What it unlocks |
 |---|---|---|
-| **TIMEKEEPER** | LANGUAGE | A second device, deliberately easy. Proves the driver pattern transfers to a chip you have never seen, from its manual alone. |
-| **HANDS** | SIGNAL | The PL061 GPIO controller, the closest thing here to Ben's 6522 parallel port. |
-| **STORAGE** | TERRITORY | virtio-mmio and a real disk. The first device that is not just registers: it needs shared memory rings. |
+| **SHAPE** | `arch/`, `drivers/`, `platform/`, `mm/`, `kernel/`, `lib/`, `tty/` | A kernel with a skeleton. Everything after this adds a folder rather than a file next to `main.rs`. Guide: `docs/architecture.md`. |
+| **TWO WORLDS** | EL0, `svc`, Linux's syscall ABI | A privilege boundary. The moment this stops being a program and becomes an operating system. |
+| **HIGH GROUND** | The kernel moves to the upper half, `TTBR1_EL1` | The whole lower half is free for programs, where Linux binaries expect to be loaded. |
+| **REDRAW** | Change a mapping while the MMU is running | Break-before-make and TLB invalidation: tables that change after boot. |
+| **ADDRESS SPACES** | A translation table per process, switched with the task | Programs that cannot see each other or the kernel. |
+| **LOADER** | Parse a static ELF, build Linux's initial stack | The first unmodified Linux binary runs. |
+| **MEMORY MAP** | `brk`, `mmap`, page faults | Programs that allocate. A bad pointer kills the program, not the kernel. |
+| **FORK** | `fork`, `execve`, `wait4`, a process tree | Processes that make processes. |
+| **MANY CORES** | Wake the other processors with PSCI | Four cores instead of one. Every `unsafe impl Sync` argument has to be true rather than plausible. Best done after LOADER, once the shape of a task has settled. |
 
-MANY CORES and TWO WORLDS used to live here. They moved onto the main line, because neither is
-optional once the goal is a small Linux rather than a demonstration: cores decide the shape of
-the scheduler, and a privilege boundary is the thing that makes it an operating system.
+## Tier 7 - Archives
+
+*Files, and a real Unix shell.*
+
+| Skill | What it really is | What it unlocks |
+|---|---|---|
+| **RAMDISK** | A cpio archive loaded next to the kernel | Files that arrive with the kernel, with no disk or network. |
+| **FILES** | A VFS and per-process file descriptors | `open`, `read`, `getdents64`, `execve` by path. |
+| **PIPES** | A bounded buffer with two ends | `a \| b`. |
+| **TERMINAL** | Linux's tty: canonical and raw mode, termios | A shell can edit its own line. |
+| **SIGNALS** | Handlers, delivery on the way back to EL0, `rt_sigreturn` | Ctrl-C, and a parent told its child died. |
+| **TIMEKEEPER** | The PL031 real-time clock, from its manual alone | Wall-clock time, so CLOCKS can answer `CLOCK_REALTIME`. A second device, deliberately easy. |
+| **CLOCKS** | `clock_gettime`, `nanosleep`, a timer list | Time for programs, and many sleepers each waking on time. |
+| **BUSYBOX** | Static busybox as process 1 | Milestone: a real Unix shell with `ls`, `cat`, `grep` and pipes. |
+| **THREADS** | `clone` sharing an address space, `futex` | Programs that do two things at once. |
+
+## Tier 8 - Senses
+
+*Devices beyond the UART.*
+
+| Skill | What it really is | What it unlocks |
+|---|---|---|
+| **HANDS** | The PL061 GPIO controller | The closest thing here to Ben's 6522 parallel port, and one more plain MMIO device before VIRTIO's rings. |
+| **VIRTIO** | The virtio-mmio transport and its rings, first device virtio-rng | Every virtual device QEMU offers: storage, network, input, random numbers. |
+| **PIXELS** | QEMU's `ramfb`, configured through `fw_cfg` | A screen. |
+| **SCREEN DEVICE** | `/dev/fb0`, its ioctls, `mmap` into a program | Programs draw. |
+| **KEYS** | virtio-input as `/dev/input/event0` | Key presses *and* releases, which a game needs and a serial line cannot give. |
+| **STORAGE** | virtio-blk | A real disk. |
+| **DISK FS** | ext2, Linux's own filesystem, in the VFS | Files that survive a reboot. |
+
+## Tier 9 - Wires
+
+*The machine talks to other machines.*
+
+| Skill | What it really is | What it unlocks |
+|---|---|---|
+| **WIRE** | virtio-net, Ethernet, ARP, IPv4, ICMP | zheos answers a ping, and pings back. |
+| **SOCKETS** | UDP sockets as file descriptors | Programs on the network. |
+| **TCP** | Connections, retransmits, `connect`, `listen`, `accept` | Reliable streams: fetch a page from the host. |
+
+## Tier 10 - DOOM
+
+| Skill | What it really is | What it unlocks |
+|---|---|---|
+| **DOOM** | doomgeneric, static against musl, with a backend on Linux APIs and the shareware WAD in the ramdisk | E1M1, playable. |
+
+DOOM waits for every other skill in the tree, not only the ones it technically needs. It is the
+last thing, not the next thing.
+
+## Crates
+
+The project has no dependencies, and by default it stays that way: a crate that hides hardware is
+a skill not learned. A few later skills are big enough that a crate is a fair trade, and each one
+names its candidate in its beads notes, to be decided at the start of that skill and not before:
+
+- **WIRE** - smoltcp, a `no_std` TCP/IP stack. The decision is made here rather than at TCP,
+  because smoltcp owns ARP and IP as well; a hand-written lower half and a borrowed TCP do not mix.
+- **DISK FS** - `fatfs` instead of hand-written ext2, if the filesystem is not the point.
+- **VIRTIO** - `virtio-drivers` was considered and is not recommended: the rings are the lesson.
+
+Whatever is borrowed sits behind the folder's own surface (`net/`, `fs/`), so the kernel above it
+never learns which it is.
 
 ## Where things stand
 

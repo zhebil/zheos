@@ -137,7 +137,7 @@ Every file, and where it goes.
 | `switch.s`, the ARM half of `context.rs` | `arch/aarch64/switch.s`, `arch/aarch64/context.rs` |
 | `cpu.rs` | split three ways, section 6 |
 | `mmu/` | `arch/aarch64/mmu/`, plus the register accessors from `cpu::mmu` |
-| `psci.rs` | `arch/aarch64/psci.rs` - it is an `hvc` instruction |
+| `psci.rs` | `arch/aarch64/psci.rs` - it is an `hvc` instruction. `Conduit` moves with it out of `board.rs`: which instruction to use is ARM knowledge |
 | `uart.rs` | `drivers/pl011.rs` |
 | `gic.rs` | `drivers/gic.rs` |
 | `dtb/`, `board.rs` | `platform/` |
@@ -157,6 +157,9 @@ Every file, and where it goes.
 `arch/mod.rs` holds two lines: the `aarch64` module, and a `pub use` of everything in it, both
 under `#[cfg(target_arch = "aarch64")]`. Generic code writes `arch::cpu::wait_for_interrupt()` and
 never says `aarch64`. A second architecture would be two more lines.
+
+`mod lib;` trips rustc's `special_module_name` warning, because `lib.rs` is normally the root of a
+library crate. Ours is `lib/mod.rs` and there is no library target, so `main.rs` allows the lint.
 
 `mmio.rs` lands in `lib/`, not `drivers/`, because it is only volatile loads and stores, and
 zhemon uses it to examine raw memory - which is the monitor's job, not a driver's.
@@ -248,6 +251,11 @@ diff <(norm /tmp/before.txt) <(norm /tmp/after.txt) && echo SAME
 turns every number into `N`. Moving code changes sizes and addresses - the `text:` size, the page
 table's address, a tick count - but never which lines print or in what order. Two boots of the same
 tree, before any move, already give `SAME`; a moved tree must too.
+
+One expected exception: the `order N:` lines. They describe how the free memory left after the
+image splits into power-of-two blocks, so when the image grows or shrinks by a page the split
+changes - one 8-page block where there used to be blocks of 1, 2 and 4. Check that `reserved:` for
+the image moved by the same page count, and the difference is explained.
 
 **The greps.** At the end:
 
